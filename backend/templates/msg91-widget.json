@@ -1,0 +1,22 @@
+{
+  "integration": "MSG91 OTP Widget API through authenticated FastAPI",
+  "widgetId": "366a6f72365a343231363337",
+  "name": "CromptonPMSDevelopment",
+  "contactPoint": "Mobile Number",
+  "primaryChannel": "SMS",
+  "resendChannels": ["SMS"],
+  "otpLength": 6,
+  "resendAfterSeconds": 60,
+  "applicationExpirySeconds": 600,
+  "providerMinimumExpiryMinutes": 15,
+  "allowedCountries": ["India"],
+  "template": "MSG91 provided default configuration",
+  "previewSender": "CInfoS",
+  "previewBrand": "InfoT Portal (provider default; not a custom Crompton SMS template)",
+  "requiredServerEnvironment": ["MSG91_WIDGET_ID", "MSG91_AUTH_KEY"],
+  "clientSecretsRequired": false,
+  "captchaEnabled": false,
+  "invisibleOtpEnabled": false,
+  "serverModeExplicitlyApproved": true,
+  "liveSmsTested": false
+}

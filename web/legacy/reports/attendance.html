@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Employee Attendance Report · Comten Reports</title>
+  <link rel="stylesheet" href="../assets/css/app.css">
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+    window.ROOT = '..';
+  </script>
+  <script src="../assets/js/config.js"></script>
+  <script src="../vendor/chart.umd.js"></script>
+  <script src="../assets/js/api.js"></script>
+  <script src="../assets/js/auth.js"></script>
+  <script src="../assets/js/ui.js"></script>
+  <script src="../assets/js/charts.js"></script>
+  <script src="../assets/js/xlsx.js"></script>
+</head>
+<body>
+  <main id="app"><div class="loading">Loading…</div></main>
+
+  <script>
+    (function () {
+      'use strict';
+      if (!window.ui.initShell('attendance')) return;
+
+      const { el, clear, qs, goto, fmtH, fmtPct, fmtTime, fmtDate, statTile, meterTile, dataTable, selectFilter } = window.ui;
+      const app = document.getElementById('app');
+      const employeeId = qs('employee');
+
+      function fail(message) {
+        clear(app).appendChild(el('div', { class: 'empty', text: message }));
+      }
+
+      // Shows a native <dialog> with a month picker; resolves to {year, month}
+      // once the user hits Generate, or null on Cancel/Esc/backdrop dismiss.
+      function promptMonth() {
+        return new Promise((resolve) => {
+          const now = new Date();
+          const defaultValue = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+          const monthInput = el('input', { type: 'month', value: defaultValue, max: defaultValue });
+          let resolved = false;
+          const finish = (value) => {
+            if (resolved) return;
+            resolved = true;
+            resolve(value);
+          };
+          const dialog = el('dialog', { class: 'month-picker' }, [
+            el('h3', { text: 'Select month' }),
+            el('p', { class: 'sub', text: 'Choose the month to export attendance for.' }),
+            el('label', null, ['Month', monthInput]),
+            el('div', { class: 'month-picker-actions' }, [
+              el('button', { type: 'button', onclick: () => dialog.close(), text: 'Cancel' }),
+              el('button', {
+                type: 'button',
+                class: 'primary',
+                onclick: () => {
+                  const parts = (monthInput.value || '').split('-');
+                  const year = parseInt(parts[0], 10);
+                  const month = parseInt(parts[1], 10);
+                  if (!year || !month) return;
+                  finish({ year: year, month: month });
+                  dialog.close();
+                },
+                text: 'Generate',
+              }),
+            ]),
+          ]);
+          // Covers Cancel, Esc and any other way the dialog closes without
+          // Generate having already resolved it.
+          dialog.addEventListener('close', () => { finish(null); dialog.remove(); });
+          document.body.appendChild(dialog);
+          dialog.showModal();
+        });
+      }
+
+      /** Sundays are never working days (see TimesheetValidator on the app
+       * side), so they don't count as "unmarked working days" for Leave
+       * Taken - count them within the same [month start, daysInPeriod] window
+       * the report API already computed, so the leave figure stays in sync
+       * with whatever cutoff (today, for the current month) it applied. */
+      function countSundaysInPeriod(year, month, daysInPeriod) {
+        if (!daysInPeriod) return 0;
+        let count = 0;
+        const start = new Date(year, month - 1, 1);
+        for (let i = 0; i < daysInPeriod; i++) {
+          if (new Date(start.getFullYear(), start.getMonth(), start.getDate() + i).getDay() === 0) count++;
+        }
+        return count;
+      }
+
+      // Employee ID/Name/Present/Leave/Late/Early/Attendance % for every EMP
+      // employee (the list this page already scopes to) in one picked month -
+      // every figure but Leave Taken is reused as-is from the existing
+      // per-employee attendance report the detail page already calls.
+      async function downloadMonthlyAttendanceExcel(employees) {
+        const picked = await promptMonth();
+        if (!picked) return;
+        const { year, month } = picked;
+        try {
+          const reports = await Promise.all(employees.map((emp) =>
+            window.api.get('/api/reports/attendance/employees/' + emp.id + '?year=' + year + '&month=' + month)));
+          const rows = reports.map((r) => {
+            const leaveTaken = Math.max(0, r.leaveDays - countSundaysInPeriod(year, month, r.daysInPeriod));
+            return [r.employee.employeeCode, r.employee.name, r.presentDays, leaveTaken,
+              r.lateComings, r.earlyExits, r.attendancePercentage];
+          });
+          window.xlsxExport.download(
+            'attendance-' + year + '-' + String(month).padStart(2, '0') + '.xlsx',
+            [{
+              name: 'Attendance',
+              headers: ['Employee ID', 'Employee Name', 'Present Days', 'Leave Taken', 'Late Coming', 'Early Exit', 'Attendance Percentage (Monthly)'],
+              rows: rows,
+            }]);
+        } catch (e) {
+          alert('Excel export failed: ' + e.message);
+        }
+      }
+
+      async function renderList() {
+        const employees = await window.api.get('/api/reports/attendance/employees');
+        clear(app);
+        app.appendChild(el('h1', { class: 'page-title', text: 'Employee Attendance Report' }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Employees with access to the Attendance module. Select one to open their report.' }));
+
+        const grid = el('div', { class: 'grid cols-3' });
+        const search = el('input', {
+          type: 'search', placeholder: 'Search by name or code…',
+          oninput: (ev) => draw(ev.target.value.toLowerCase()),
+        });
+        app.appendChild(el('div', { class: 'filters' }, [
+          el('label', null, ['Search', search]),
+          el('div', { class: 'spacer' }),
+          el('button', {
+            class: 'export-btn',
+            title: 'Download the monthly attendance report as an Excel (.xlsx) file',
+            onclick: () => downloadMonthlyAttendanceExcel(employees),
+            text: '⬇ Excel',
+          }),
+        ]));
+        app.appendChild(grid);
+
+        function draw(query) {
+          clear(grid);
+          const filtered = employees.filter((emp) =>
+            !query || emp.name.toLowerCase().includes(query) || emp.employeeCode.toLowerCase().includes(query));
+          if (!filtered.length) {
+            grid.appendChild(el('div', { class: 'empty', text: 'No employees found.' }));
+            return;
+          }
+          for (const emp of filtered) {
+            grid.appendChild(el('a', {
+              class: 'card list-card',
+              href: '?employee=' + emp.id,
+            }, [
+              el('div', { class: 'title', text: emp.name }),
+              el('div', { class: 'meta', text: emp.employeeCode + (emp.role ? ' · ' + emp.role : '') }),
+            ]));
+          }
+        }
+        draw('');
+      }
+
+      async function renderDetail() {
+        const now = new Date();
+        const year = parseInt(qs('year'), 10) || now.getFullYear();
+        const month = parseInt(qs('month'), 10) || (now.getMonth() + 1);
+
+        const [employees, report] = await Promise.all([
+          window.api.get('/api/reports/attendance/employees'),
+          window.api.get('/api/reports/attendance/employees/' + employeeId + '?year=' + year + '&month=' + month),
+        ]);
+        clear(app);
+
+        app.appendChild(el('a', { class: 'back-link', href: 'attendance.html', text: '← All employees' }));
+        app.appendChild(el('h1', { class: 'page-title', text: report.employee.name }));
+        app.appendChild(el('p', { class: 'page-sub', text: report.employee.employeeCode + ' · Attendance report' }));
+
+        // Filter row (scopes everything below it) - Month/Year apply as soon
+        // as they're picked, same as the Employee dropdown, no Apply button.
+        const monthNames = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+        app.appendChild(el('div', { class: 'filters' }, [
+          selectFilter('Employee',
+            employees.map((emp) => ({ value: emp.id, label: emp.name + ' (' + emp.employeeCode + ')' })),
+            employeeId, (v) => goto({ employee: v })),
+          selectFilter('Month',
+            monthNames.map((name, i) => ({ value: i + 1, label: name })),
+            month, (v) => goto({ month: v })),
+          selectFilter('Year',
+            [0, 1, 2, 3].map((offset) => now.getFullYear() - offset).map((y) => ({ value: y, label: String(y) })),
+            year, (v) => goto({ year: v })),
+          el('div', { class: 'spacer' }),
+        ]));
+
+        // KPI row
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Present days', String(report.presentDays), 'of ' + report.daysInPeriod + ' days so far'),
+          statTile('Leave taken', String(report.leaveDays), 'unmarked days count as leave'),
+          statTile('Late comings', String(report.lateComings), 'check-in after 10:00 AM'),
+          statTile('Early exits', String(report.earlyExits), 'check-out before 5:00 PM'),
+          meterTile('Attendance', report.attendancePercentage, 'monthly percentage'),
+        ]));
+
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        // Monthly attendance % trend (line, single series - no legend box)
+        const trend = report.monthlyTrend || [];
+        window.charts.card(grid, {
+          title: 'Monthly attendance percentage',
+          sub: 'Last 6 months',
+          config: window.charts.lineConfig(
+            trend.map((m) => m.month),
+            [{ label: 'Attendance %', data: trend.map((m) => m.percentage), slot: 0 }],
+            { yTitle: '%' }),
+          table: {
+            headers: ['Month', 'Present days', 'Days in period', 'Attendance %'],
+            rows: trend.map((m) => [m.month, m.presentDays, m.daysInPeriod, m.percentage]),
+          },
+        });
+
+        // Daily worked hours (bar, single series)
+        const days = report.days || [];
+        window.charts.card(grid, {
+          title: 'Daily worked hours',
+          sub: monthNames[month - 1] + ' ' + year,
+          scrollX: true,
+          minWidthPerCategory: 60,
+          config: window.charts.barConfig(
+            days.map((d) => fmtDate(d.date)),
+            [{ label: 'Hours', data: days.map((d) => d.hoursWorked ?? 0), slot: 0 }],
+            { xTitle: 'Date', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Date', 'Check-in', 'Check-out', 'Hours'],
+            rows: days.map((d) => [fmtDate(d.date), fmtTime(d.inTime), fmtTime(d.outTime), d.hoursWorked ?? 0]),
+            formatters: { 3: fmtH },
+          },
+        });
+
+        // Daily timeline table
+        app.appendChild(el('h2', { class: 'section-title', text: 'Daily records' }));
+        const tableCard = el('div', { class: 'card' });
+        if (!days.length) {
+          tableCard.appendChild(el('div', { class: 'empty', text: 'No attendance records in this month.' }));
+        } else {
+          const table = dataTable(
+            ['Date', 'Check-in', 'Check-out', 'Hours', 'Flags'],
+            days.map((d) => [fmtDate(d.date), fmtTime(d.inTime), fmtTime(d.outTime), d.hoursWorked ?? 0, '']),
+            { 3: fmtH });
+          // Replace the last cell of each row with late/early badges.
+          const rows = table.querySelectorAll('tbody tr');
+          days.forEach((d, i) => {
+            const cell = rows[i].lastChild;
+            cell.textContent = '';
+            const notCheckedOut = !!d.inTime && !d.outTime;
+            if (d.late) cell.appendChild(window.ui.statusBadge('NOT_BILLED')).lastChild.textContent = 'Late';
+            if (d.earlyExit) cell.appendChild(window.ui.statusBadge('PARTLY_PAID')).lastChild.textContent = 'Early exit';
+            if (notCheckedOut) cell.appendChild(window.ui.statusBadge('NOT_CHECKED_OUT'));
+            if (!d.late && !d.earlyExit && !notCheckedOut) cell.textContent = '—';
+          });
+          tableCard.appendChild(table);
+        }
+        app.appendChild(tableCard);
+
+        // Summary line under the KPIs
+        app.appendChild(el('p', { class: 'page-sub', text:
+          'Total ' + fmtH(report.totalHours) + ' worked · average ' + fmtH(report.averageHoursPerPresentDay) +
+          ' per present day · attendance ' + fmtPct(report.attendancePercentage) }));
+      }
+
+      (employeeId ? renderDetail() : renderList()).catch((e) => fail(e.message));
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Billing Report · Comten Reports</title>
+  <link rel="stylesheet" href="../assets/css/app.css">
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+    window.ROOT = '..';
+  </script>
+  <script src="../assets/js/config.js"></script>
+  <script src="../vendor/chart.umd.js"></script>
+  <script src="../assets/js/api.js"></script>
+  <script src="../assets/js/auth.js"></script>
+  <script src="../assets/js/ui.js"></script>
+  <script src="../assets/js/charts.js"></script>
+  <script src="../assets/js/xlsx.js"></script>
+</head>
+<body>
+  <main id="app"><div class="loading">Loading…</div></main>
+
+  <script>
+    (function () {
+      'use strict';
+      if (!window.ui.initShell('project-billing')) return;
+
+      const { el, clear, qs, goto, fmtH, statTile, statusBadge, dataTable, selectFilter } = window.ui;
+      const app = document.getElementById('app');
+      const projectId = qs('project');
+      const moduleId = qs('module');
+
+      function fail(message) {
+        clear(app).appendChild(el('div', { class: 'empty', text: message }));
+      }
+
+      // Shared "pick a project, optionally a module, then generate" dialog -
+      // every Excel download in this module goes through this before it
+      // produces a file, regardless of which view it was opened from.
+      // Reuses the same dialog chrome as the Attendance report's month
+      // picker (see app.css `dialog.month-picker`).
+      function openBillingExportDialog(projects, defaultProjectId, defaultModuleId) {
+        return new Promise((resolve) => {
+          let resolved = false;
+          const finish = (v) => { if (resolved) return; resolved = true; resolve(v); };
+
+          const initialProjectId = String(defaultProjectId || (projects[0] && projects[0].id) || '');
+          const projectSelect = el('select', null, projects.map((p) => {
+            const opt = el('option', { value: String(p.id), text: p.projectName });
+            if (String(p.id) === initialProjectId) opt.setAttribute('selected', '');
+            return opt;
+          }));
+
+          const moduleSelect = el('select', null, [el('option', { value: '', text: 'All modules (project-level report)' })]);
+
+          async function loadModules(projectId, selectedModuleId) {
+            clear(moduleSelect);
+            moduleSelect.appendChild(el('option', { value: '', text: 'All modules (project-level report)' }));
+            if (!projectId) return;
+            const billing = await window.api.get('/api/reports/billing/projects/' + projectId);
+            for (const m of (billing.modules || [])) {
+              const opt = el('option', { value: String(m.id), text: m.moduleName });
+              if (String(m.id) === String(selectedModuleId || '')) opt.setAttribute('selected', '');
+              moduleSelect.appendChild(opt);
+            }
+          }
+
+          projectSelect.addEventListener('change', () => loadModules(projectSelect.value, ''));
+
+          const dialog = el('dialog', { class: 'month-picker' }, [
+            el('h3', { text: 'Download billing report' }),
+            el('p', { class: 'sub', text: 'Choose a project, and optionally a module, to export. Leave the module as "All modules" for a project-level report.' }),
+            el('label', null, ['Project', projectSelect]),
+            el('label', null, ['Module', moduleSelect]),
+            el('div', { class: 'month-picker-actions' }, [
+              el('button', { type: 'button', onclick: () => dialog.close(), text: 'Cancel' }),
+              el('button', {
+                type: 'button',
+                class: 'primary',
+                onclick: () => {
+                  if (!projectSelect.value) return;
+                  finish({ projectId: projectSelect.value, moduleId: moduleSelect.value || null });
+                  dialog.close();
+                },
+                text: 'Generate',
+              }),
+            ]),
+          ]);
+          dialog.addEventListener('close', () => { finish(null); dialog.remove(); });
+          document.body.appendChild(dialog);
+          dialog.showModal();
+          loadModules(initialProjectId, defaultModuleId);
+        });
+      }
+
+      // Project-level report: Project ID/Name, Number of Modules, Billable
+      // Hours by Project, Unbilled/Billed Hours (reused as-is from
+      // /api/reports/billing/projects/{id}) plus a Billable Hours by
+      // Employee breakdown sheet.
+      // Module-level report: same shape, scoped to the one selected module
+      // via /api/reports/billing/modules/{id} - also all reused as-is.
+      async function downloadBillingExcel(projects, defaultProjectId, defaultModuleId) {
+        if (!projects.length) return;
+        const picked = await openBillingExportDialog(projects, defaultProjectId, defaultModuleId);
+        if (!picked) return;
+        try {
+          if (picked.moduleId) {
+            const data = await window.api.get('/api/reports/billing/modules/' + picked.moduleId);
+            const m = data.module;
+            // ModuleBillingDetail only carries the numeric project id, not its
+            // project_code - looked up from the projects list already passed in.
+            const project = projects.find((p) => p.id === data.projectId);
+            window.xlsxExport.download('module-billing-' + m.moduleName + '.xlsx', [
+              {
+                name: 'Module Billing',
+                headers: ['Project ID', 'Project Name', 'Module Name', 'Billable Hours by Module',
+                  'Billing Status', 'Unbilled Hours', 'Billed Hours'],
+                rows: [[(project && project.projectCode) || data.projectId, data.projectName, m.moduleName,
+                  m.billableHours, window.ui.statusLabel(m.billingStatus), m.unbilledHours, m.billedHours]],
+              },
+              {
+                name: 'Billable Hours by Employee',
+                headers: ['Employee', 'Code', 'Billable Hours'],
+                rows: (data.billableHoursByEmployee || []).map((emp) => [emp.name, emp.employeeCode, emp.hours]),
+              },
+            ]);
+          } else {
+            const data = await window.api.get('/api/reports/billing/projects/' + picked.projectId);
+            window.xlsxExport.download('project-billing-' + data.projectCode + '.xlsx', [
+              {
+                name: 'Project Billing',
+                headers: ['Project ID', 'Project Name', 'Number of Modules', 'Billable Hours by Project',
+                  'Unbilled Hours', 'Billed Hours'],
+                rows: [[data.projectCode, data.projectName, (data.modules || []).length,
+                  data.totalBillableHours, data.totalUnbilledHours, data.totalBilledHours]],
+              },
+              {
+                name: 'Billable Hours by Employee',
+                headers: ['Employee', 'Code', 'Billable Hours'],
+                rows: (data.billableHoursByEmployee || []).map((emp) => [emp.name, emp.employeeCode, emp.hours]),
+              },
+            ]);
+          }
+        } catch (e) {
+          alert('Excel export failed: ' + e.message);
+        }
+      }
+
+      function downloadButton(onclick) {
+        return el('button', {
+          class: 'export-btn',
+          title: 'Download a project or module billing report as an Excel (.xlsx) file',
+          onclick: onclick,
+          text: '⬇ Excel',
+        });
+      }
+
+      async function renderProjects() {
+        const projects = await window.api.get('/api/reports/projects');
+        clear(app);
+        app.appendChild(el('h1', { class: 'page-title', text: 'Project Billing Report' }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Billing is tracked per module. Select a project to see its modules.' }));
+
+        if (!projects.length) {
+          app.appendChild(el('div', { class: 'empty', text: 'No projects found.' }));
+          return;
+        }
+        app.appendChild(el('div', { class: 'filters' }, [
+          el('div', { class: 'spacer' }),
+          downloadButton(() => downloadBillingExcel(projects, null, null)),
+        ]));
+        app.appendChild(el('div', { class: 'grid cols-3' }, projects.map((p) =>
+          el('a', { class: 'card list-card', href: '?project=' + p.id }, [
+            el('div', { class: 'title', text: p.projectName }),
+            el('div', { class: 'meta', text: p.projectCode + ' · ' + p.moduleCount + ' module(s)' }),
+          ])
+        )));
+      }
+
+      async function renderProject() {
+        const [projects, data] = await Promise.all([
+          window.api.get('/api/reports/projects'),
+          window.api.get('/api/reports/billing/projects/' + projectId),
+        ]);
+        clear(app);
+
+        app.appendChild(el('a', { class: 'back-link', href: 'project-billing.html', text: '← All projects' }));
+        app.appendChild(el('h1', { class: 'page-title', text: data.projectName }));
+        app.appendChild(el('p', { class: 'page-sub', text: data.projectCode + ' · Billing report' }));
+
+        app.appendChild(el('div', { class: 'filters' }, [
+          selectFilter('Project',
+            projects.map((x) => ({ value: x.id, label: x.projectName })),
+            projectId, (v) => goto({ project: v, module: null })),
+          selectFilter('Module',
+            [{ value: '', label: 'All modules' }].concat(
+              (data.modules || []).map((x) => ({ value: x.id, label: x.moduleName }))),
+            '', (v) => { if (v) goto({ module: v }); }),
+          el('div', { class: 'spacer' }),
+          downloadButton(() => downloadBillingExcel(projects, projectId, null)),
+        ]));
+
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Billable hours', fmtH(data.totalBillableHours), 'across all modules'),
+          statTile('Billed hours', fmtH(data.totalBilledHours)),
+          statTile('Unbilled hours', fmtH(data.totalUnbilledHours), 'allocated − billed'),
+        ]));
+
+        const modules = data.modules || [];
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        // Billed vs unbilled per module (stacked bar, 2 series)
+        window.charts.card(grid, {
+          title: 'Billed vs unbilled hours by module',
+          scrollX: true,
+          minWidthPerCategory: 70,
+          config: window.charts.barConfig(
+            modules.map((m) => m.moduleName),
+            [
+              { label: 'Billed', data: modules.map((m) => m.billedHours), slot: 0 },
+              { label: 'Unbilled', data: modules.map((m) => m.unbilledHours), slot: 1 },
+            ],
+            { stacked: true, xTitle: 'Modules', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Module', 'Allocated', 'Billable', 'Billed', 'Unbilled'],
+            rows: modules.map((m) => [m.moduleName, m.allocatedHours, m.billableHours, m.billedHours, m.unbilledHours]),
+            formatters: { 1: fmtH, 2: fmtH, 3: fmtH, 4: fmtH },
+          },
+        });
+
+        // Billable hours per module (horizontal bar, single series)
+        window.charts.card(grid, {
+          title: 'Billable hours by module',
+          tall: modules.length > 8,
+          config: window.charts.barConfig(
+            modules.map((m) => m.moduleName),
+            [{ label: 'Billable hours', data: modules.map((m) => m.billableHours), slot: 0 }],
+            { horizontal: true, hours: true }),
+          table: {
+            headers: ['Module', 'Billable hours'],
+            rows: modules.map((m) => [m.moduleName, m.billableHours]),
+            formatters: { 1: fmtH },
+          },
+        });
+
+        app.appendChild(el('h2', { class: 'section-title', text: 'Modules' }));
+        if (!modules.length) {
+          app.appendChild(el('div', { class: 'empty', text: 'No modules in this project.' }));
+          return;
+        }
+        app.appendChild(el('div', { class: 'grid cols-3' }, modules.map((m) =>
+          el('a', { class: 'card list-card', href: '?project=' + projectId + '&module=' + m.id }, [
+            el('div', { class: 'title', text: m.moduleName }),
+            el('div', { class: 'meta' }, [statusBadge(m.billingStatus)]),
+            el('div', { class: 'meta', text: fmtH(m.billableHours) + ' billable · ' + fmtH(m.billedHours) + ' billed' + (m.spocName ? ' · SPOC: ' + m.spocName : '') }),
+          ])
+        )));
+      }
+
+      async function renderModule() {
+        const data = await window.api.get('/api/reports/billing/modules/' + moduleId);
+        const pid = projectId || data.projectId;
+        const [projects, projectData] = await Promise.all([
+          window.api.get('/api/reports/projects'),
+          window.api.get('/api/reports/billing/projects/' + pid),
+        ]);
+        const m = data.module;
+        clear(app);
+
+        app.appendChild(el('a', { class: 'back-link', href: '?project=' + data.projectId, text: '← ' + data.projectName }));
+        app.appendChild(el('h1', { class: 'page-title', text: m.moduleName }));
+        app.appendChild(el('p', { class: 'page-sub' }, [
+          data.projectName + ' · Billing status: ', statusBadge(m.billingStatus),
+        ]));
+
+        app.appendChild(el('div', { class: 'filters' }, [
+          selectFilter('Project',
+            projects.map((x) => ({ value: x.id, label: x.projectName })),
+            pid, (v) => goto({ project: v, module: null })),
+          selectFilter('Module',
+            (projectData.modules || []).map((x) => ({ value: x.id, label: x.moduleName })),
+            moduleId, (v) => goto({ project: pid, module: v })),
+          el('div', { class: 'spacer' }),
+          downloadButton(() => downloadBillingExcel(projects, pid, moduleId)),
+        ]));
+
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Allocated hours', fmtH(m.allocatedHours), 'module estimate'),
+          statTile('Billable hours', fmtH(m.billableHours), 'from billable work logs'),
+          statTile('Billed hours', fmtH(m.billedHours)),
+          statTile('Unbilled hours', fmtH(m.unbilledHours), 'allocated − billed'),
+          statTile('SPOC', m.spocName || '—', 'single point of contact'),
+        ]));
+
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        // Billable hours by employee (horizontal bar)
+        const employees = data.billableHoursByEmployee || [];
+        window.charts.card(grid, {
+          title: 'Billable hours by employee',
+          tall: employees.length > 8,
+          config: window.charts.barConfig(
+            employees.map((emp) => emp.name),
+            [{ label: 'Billable hours', data: employees.map((emp) => emp.hours), slot: 0 }],
+            { horizontal: true, hours: true }),
+          table: {
+            headers: ['Employee', 'Code', 'Billable hours'],
+            rows: employees.map((emp) => [emp.name, emp.employeeCode, emp.hours]),
+            formatters: { 2: fmtH },
+          },
+        });
+
+        // Allocated / billed / unbilled comparison (horizontal bar, single series)
+        window.charts.card(grid, {
+          title: 'Allocation vs billing',
+          config: window.charts.barConfig(
+            ['Allocated', 'Billable', 'Billed', 'Unbilled'],
+            [{ label: 'Hours', data: [m.allocatedHours, m.billableHours, m.billedHours, m.unbilledHours], slot: 0 }],
+            { horizontal: true, hours: true }),
+          table: {
+            headers: ['Measure', 'Hours'],
+            rows: [
+              ['Allocated', m.allocatedHours],
+              ['Billable', m.billableHours],
+              ['Billed', m.billedHours],
+              ['Unbilled', m.unbilledHours],
+            ],
+            formatters: { 1: fmtH },
+          },
+        });
+
+        // Billing record details
+        app.appendChild(el('h2', { class: 'section-title', text: 'Billing record' }));
+        const card = el('div', { class: 'card' });
+        card.appendChild(dataTable(
+          ['Status', 'SPOC', 'Updated by', 'Updated at', 'Remarks'],
+          [[window.ui.statusLabel(m.billingStatus), m.spocName || '—', data.updatedBy || '—',
+            data.updatedAt ? new Date(data.updatedAt).toLocaleString() : '—', data.remarks || '—']]));
+        app.appendChild(card);
+      }
+
+      (moduleId ? renderModule() : projectId ? renderProject() : renderProjects())
+        .catch((e) => fail(e.message));
+    })();
+  </script>
+</body>
+</html>

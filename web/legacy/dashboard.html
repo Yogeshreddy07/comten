@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · Comten Reports</title>
+  <link rel="stylesheet" href="assets/css/app.css">
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+    window.ROOT = '.';
+  </script>
+  <script src="assets/js/config.js"></script>
+  <script src="vendor/chart.umd.js"></script>
+  <script src="assets/js/api.js"></script>
+  <script src="assets/js/auth.js"></script>
+  <script src="assets/js/ui.js"></script>
+  <script src="assets/js/charts.js"></script>
+  <script src="assets/js/xlsx.js"></script>
+</head>
+<body>
+  <main id="app"><div class="loading">Loading…</div></main>
+
+  <script>
+    (function () {
+      'use strict';
+      const user = window.ui.initShell('dashboard');
+      if (!user) return;
+
+      const { el, clear, fmtH, statTile, statusLabel } = window.ui;
+      const app = document.getElementById('app');
+
+      const sections = [
+        { href: 'reports/attendance.html', icon: '🗓️', title: 'Employee Attendance Report',
+          desc: 'Present days, leave taken, late comings, early exits and monthly attendance percentage per employee.' },
+        { href: 'reports/working-hours.html', icon: '⏱️', title: 'Employee Working Hours Report',
+          desc: 'Total, regular and overtime hours, billable vs non-billable split and effective utilization per employee.' },
+        { href: 'reports/project-utilization.html', icon: '📊', title: 'Project Time Utilization Report',
+          desc: 'Hours spent per project and module, employee-wise contribution, planned vs actual and progress.' },
+        { href: 'reports/project-billing.html', icon: '💳', title: 'Project Billing Report',
+          desc: 'Module-level billing: billable hours by project and employee, billing status, billed and unbilled hours.' },
+        { href: 'reports/clients.html', icon: '🏢', title: 'Client Report',
+          desc: 'Projects and modules grouped by client, with allocated vs utilized hours per project.' },
+        { href: 'reports/billing-status.html', icon: '🧾', title: 'Billing Status Report',
+          desc: 'Modules by billing status - not billed, billed, partly paid - and billed modules with SPOC details.' },
+      ];
+
+      function renderSections() {
+        app.appendChild(el('h2', { class: 'section-title', text: 'Report sections' }));
+        app.appendChild(el('div', { class: 'grid cols-3' }, sections.map((s) =>
+          el('a', { class: 'card list-card', href: s.href }, [
+            el('div', { class: 'icon', 'aria-hidden': 'true', text: s.icon }),
+            el('div', { class: 'title', text: s.title }),
+            el('div', { class: 'meta', text: s.desc }),
+          ])
+        )));
+      }
+
+      // Organization-wide overview built purely from the existing report
+      // endpoints - one snapshot of projects, clients and billing before
+      // drilling into a specific report.
+      async function render() {
+        const [projects, clients, billing] = await Promise.all([
+          window.api.get('/api/reports/projects'),
+          window.api.get('/api/reports/clients'),
+          window.api.get('/api/reports/billing-status'),
+        ]);
+        clear(app);
+
+        app.appendChild(el('h1', { class: 'page-title', text: 'Welcome, ' + user.name }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Organization overview across every project, client and billing record.' }));
+
+        const totalPlanned = projects.reduce((sum, p) => sum + (p.plannedHours || 0), 0);
+        const totalActual = projects.reduce((sum, p) => sum + (p.actualHours || 0), 0);
+        const moduleCount = projects.reduce((sum, p) => sum + (p.moduleCount || 0), 0);
+        const summary = billing.summary || [];
+        const countOf = (category) => {
+          const entry = summary.find((s) => s.category === category);
+          return entry ? entry.count : 0;
+        };
+
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Projects', String(projects.length), moduleCount + ' module(s)'),
+          statTile('Clients', String(clients.length)),
+          statTile('Planned hours', fmtH(totalPlanned), 'across all projects'),
+          statTile('Actual hours', fmtH(totalActual), 'logged in work logs'),
+          statTile('Billed modules', String(countOf('BILLED')), countOf('PARTLY_PAID') + ' partly paid'),
+        ]));
+
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        // Planned vs actual hours per project (grouped bar, 2 series). Every
+        // project is plotted (not just a top slice) - the chart scrolls
+        // horizontally instead, so it keeps working as the project count grows.
+        const sortedByPlanned = projects.slice().sort((a, b) => (b.plannedHours || 0) - (a.plannedHours || 0));
+        const topProjects = sortedByPlanned.slice(0, 8);
+        window.charts.card(grid, {
+          title: 'Planned vs actual hours by project',
+          sub: 'Scroll to see every project · hover a bar or open the table for its name',
+          scrollX: true,
+          minWidthPerCategory: 90,
+          config: window.charts.barConfig(
+            sortedByPlanned.map((p) => p.projectName),
+            [
+              { label: 'Planned', data: sortedByPlanned.map((p) => p.plannedHours), slot: 0 },
+              { label: 'Actual', data: sortedByPlanned.map((p) => p.actualHours), slot: 1 },
+            ],
+            { xTitle: 'Projects', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Project', 'Planned', 'Actual', 'Billable Progress %'],
+            rows: sortedByPlanned.map((p) => [p.projectName, p.plannedHours, p.actualHours, p.progressPercentage]),
+            formatters: { 1: fmtH, 2: fmtH },
+          },
+        });
+
+        // Billing distribution (part-to-whole, 3 slices)
+        window.charts.card(grid, {
+          title: 'Billing distribution',
+          sub: 'Modules by billing category',
+          config: window.charts.doughnutConfig([
+            { label: 'Not billed', value: countOf('NOT_BILLED'), slot: 0 },
+            { label: 'Billed', value: countOf('BILLED'), slot: 1 },
+            { label: 'Partly paid', value: countOf('PARTLY_PAID'), slot: 2 },
+          ]),
+          table: {
+            headers: ['Category', 'Modules'],
+            rows: summary.map((s) => [statusLabel(s.category), s.count]),
+          },
+        });
+
+        // Client hours (grouped bar, 2 series). Every client is plotted - the
+        // chart scrolls horizontally instead of cutting off at a top slice.
+        const sortedClients = clients.slice().sort((a, b) => (b.allocatedHours || 0) - (a.allocatedHours || 0));
+        window.charts.card(grid, {
+          title: 'Allocated vs utilized hours by client',
+          sub: 'Scroll to see every client · hover a bar or open the table for its name',
+          scrollX: true,
+          minWidthPerCategory: 90,
+          config: window.charts.barConfig(
+            sortedClients.map((c) => statusLabel(c.clientId)),
+            [
+              { label: 'Allocated', data: sortedClients.map((c) => c.allocatedHours), slot: 0 },
+              { label: 'Utilized', data: sortedClients.map((c) => c.utilizedHours), slot: 1 },
+            ],
+            { xTitle: 'Clients', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Client', 'Projects', 'Allocated', 'Utilized'],
+            rows: sortedClients.map((c) => [statusLabel(c.clientId), c.projectCount, c.allocatedHours, c.utilizedHours]),
+            formatters: { 2: fmtH, 3: fmtH },
+          },
+        });
+
+        // Project progress (horizontal bar)
+        window.charts.card(grid, {
+          title: 'Project progress (Billable)',
+          sub: 'Actual vs planned hours, %',
+          tall: topProjects.length > 8,
+          config: window.charts.barConfig(
+            topProjects.map((p) => p.projectName),
+            [{ label: 'Billable Progress %', data: topProjects.map((p) => p.progressPercentage), slot: 2 }],
+            { horizontal: true, min: 0, max: 100, stepSize: 10 }),
+          table: {
+            headers: ['Project', 'Billable Progress %'],
+            rows: topProjects.map((p) => [p.projectName, p.progressPercentage]),
+          },
+        });
+
+        renderSections();
+      }
+
+      render().catch((e) => {
+        // The overview needs report data; if it fails (e.g. no records yet),
+        // still show the section links so the site stays navigable.
+        clear(app);
+        app.appendChild(el('h1', { class: 'page-title', text: 'Welcome, ' + user.name }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Pick a report section to get started.' }));
+        app.appendChild(el('div', { class: 'empty', text: 'Overview unavailable: ' + e.message }));
+        renderSections();
+      });
+    })();
+  </script>
+</body>
+</html>

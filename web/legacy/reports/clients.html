@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Client Report · Comten Reports</title>
+  <link rel="stylesheet" href="../assets/css/app.css">
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+    window.ROOT = '..';
+  </script>
+  <script src="../assets/js/config.js"></script>
+  <script src="../vendor/chart.umd.js"></script>
+  <script src="../assets/js/api.js"></script>
+  <script src="../assets/js/auth.js"></script>
+  <script src="../assets/js/ui.js"></script>
+  <script src="../assets/js/charts.js"></script>
+  <script src="../assets/js/xlsx.js"></script>
+</head>
+<body>
+  <main id="app"><div class="loading">Loading…</div></main>
+
+  <script>
+    (function () {
+      'use strict';
+      if (!window.ui.initShell('clients')) return;
+
+      const { el, clear, qs, goto, fmtH, fmtPct, statTile, statusLabel, selectFilter, exportButton } = window.ui;
+      const app = document.getElementById('app');
+      const clientId = qs('client');
+
+      function fail(message) {
+        clear(app).appendChild(el('div', { class: 'empty', text: message }));
+      }
+
+      async function renderClients() {
+        const clients = await window.api.get('/api/reports/clients');
+        clear(app);
+        app.appendChild(el('h1', { class: 'page-title', text: 'Client Report' }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Projects grouped by client. Select a client to see its projects and modules.' }));
+
+        if (!clients.length) {
+          app.appendChild(el('div', { class: 'empty', text: 'No clients found.' }));
+          return;
+        }
+        app.appendChild(el('div', { class: 'filters' }, [
+          el('div', { class: 'spacer' }),
+          exportButton('clients.xlsx', () => [{
+            name: 'Client-wise Projects',
+            headers: ['Client', 'Projects', 'Modules', 'Allocated h', 'Utilized h'],
+            rows: clients.map((c) => [statusLabel(c.clientId), c.projectCount, c.moduleCount,
+              c.allocatedHours, c.utilizedHours]),
+          }]),
+        ]));
+        app.appendChild(el('div', { class: 'grid cols-3' }, clients.map((c) =>
+          el('a', { class: 'card list-card', href: '?client=' + encodeURIComponent(c.clientId) }, [
+            el('div', { class: 'title', text: statusLabel(c.clientId) }),
+            el('div', { class: 'meta', text: c.projectCount + ' project(s) · ' + c.moduleCount + ' module(s)' }),
+            el('div', { class: 'meta', text: fmtH(c.utilizedHours) + ' used of ' + fmtH(c.allocatedHours) + ' allocated' }),
+          ])
+        )));
+      }
+
+      async function renderClient() {
+        const [clients, data] = await Promise.all([
+          window.api.get('/api/reports/clients'),
+          window.api.get('/api/reports/clients/' + encodeURIComponent(clientId)),
+        ]);
+        clear(app);
+
+        app.appendChild(el('a', { class: 'back-link', href: 'clients.html', text: '← All clients' }));
+        app.appendChild(el('h1', { class: 'page-title', text: statusLabel(data.clientId) }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Client report · projects, modules and time utilization' }));
+
+        const projects = data.projects || [];
+
+        app.appendChild(el('div', { class: 'filters' }, [
+          selectFilter('Client',
+            clients.map((c) => ({ value: c.clientId, label: statusLabel(c.clientId) })),
+            clientId, (v) => goto({ client: v })),
+          el('div', { class: 'spacer' }),
+          exportButton('client-' + data.clientId + '.xlsx', async () => {
+            // Billable/Billed/Unbilled hours aren't part of the client report API -
+            // fetched per project from the existing Project Billing endpoint, same
+            // source the Project Billing report page itself uses.
+            const billing = await Promise.all(
+              projects.map((p) => window.api.get('/api/reports/billing/projects/' + p.id)));
+            return [
+            {
+              name: 'Project-wise Hours',
+              headers: ['Project', 'Code', 'Allocated h', 'Utilized h', 'Billable Progress %'],
+              rows: projects.map((p) => [p.projectName, p.projectCode, p.allocatedHours,
+                p.utilizedHours, p.progressPercentage]),
+            },
+            {
+              name: 'Project-wise Billing',
+              headers: ['Project', 'Code', 'Billable Hours', 'Billed Hours', 'Unbilled Hours'],
+              rows: projects.map((p, i) => [p.projectName, p.projectCode, billing[i].totalBillableHours,
+                billing[i].totalBilledHours, billing[i].totalUnbilledHours]),
+            },
+            {
+              name: 'Modules',
+              headers: ['Project', 'Module', 'Team lead', 'Status', 'Planned h', 'Actual h', 'Remaining h', 'Billable Progress %'],
+              rows: projects.flatMap((p) => (p.modules || []).map((m) => [p.projectName, m.moduleName,
+                m.teamLeadName || '', statusLabel(m.status), m.plannedHours, m.actualHours,
+                m.remainingHours, m.progressPercentage])),
+            },
+            ];
+          }),
+        ]));
+        const totalAllocated = projects.reduce((sum, p) => sum + p.allocatedHours, 0);
+        const totalUtilized = projects.reduce((sum, p) => sum + p.utilizedHours, 0);
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Projects', String(projects.length)),
+          statTile('Hours allocated', fmtH(totalAllocated), 'total across projects'),
+          statTile('Hours utilized', fmtH(totalUtilized), 'from work logs'),
+        ]));
+
+        // Allocated vs utilized per project (grouped bar, 2 series)
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+        window.charts.card(grid, {
+          title: 'Project-wise hours: allocated vs utilized',
+          scrollX: true,
+          minWidthPerCategory: 90,
+          config: window.charts.barConfig(
+            projects.map((p) => p.projectName),
+            [
+              { label: 'Allocated', data: projects.map((p) => p.allocatedHours), slot: 0 },
+              { label: 'Utilized', data: projects.map((p) => p.utilizedHours), slot: 1 },
+            ],
+            { xTitle: 'Projects', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Project', 'Allocated', 'Utilized', 'Billable Progress %'],
+            rows: projects.map((p) => [p.projectName, p.allocatedHours, p.utilizedHours, p.progressPercentage]),
+            formatters: { 1: fmtH, 2: fmtH },
+          },
+        });
+
+        // Per-project cards with module breakdown
+        for (const p of projects) {
+          app.appendChild(el('h2', { class: 'section-title', text: p.projectName + ' (' + p.projectCode + ')' }));
+          const card = el('div', { class: 'card' });
+          card.appendChild(el('p', { class: 'sub', text:
+            fmtH(p.utilizedHours) + ' used of ' + fmtH(p.allocatedHours) + ' allocated · ' + fmtPct(p.progressPercentage) + ' billable progress' }));
+
+          const meter = el('div', { class: 'meter' }, [el('span')]);
+          meter.firstChild.style.width = Math.max(0, Math.min(100, p.progressPercentage || 0)) + '%';
+          card.appendChild(meter);
+
+          const modules = p.modules || [];
+          if (modules.length) {
+            card.appendChild(window.ui.dataTable(
+              ['Module', 'Team lead', 'Status', 'Planned h', 'Actual h', 'Remaining h', 'Billable Progress %'],
+              modules.map((m) => [m.moduleName, m.teamLeadName || '—', statusLabel(m.status),
+                m.plannedHours, m.actualHours, m.remainingHours, m.progressPercentage]),
+              { 3: fmtH, 4: fmtH, 5: fmtH }));
+          } else {
+            card.appendChild(el('div', { class: 'empty', text: 'No modules.' }));
+          }
+          app.appendChild(card);
+        }
+      }
+
+      (clientId ? renderClient() : renderClients()).catch((e) => fail(e.message));
+    })();
+  </script>
+</body>
+</html>

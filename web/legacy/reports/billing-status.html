@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Billing Status Report · Comten Reports</title>
+  <link rel="stylesheet" href="../assets/css/app.css">
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+    window.ROOT = '..';
+  </script>
+  <script src="../assets/js/config.js"></script>
+  <script src="../vendor/chart.umd.js"></script>
+  <script src="../assets/js/api.js"></script>
+  <script src="../assets/js/auth.js"></script>
+  <script src="../assets/js/ui.js"></script>
+  <script src="../assets/js/charts.js"></script>
+  <script src="../assets/js/xlsx.js"></script>
+</head>
+<body>
+  <main id="app"><div class="loading">Loading…</div></main>
+
+  <script>
+    (function () {
+      'use strict';
+      if (!window.ui.initShell('billing-status')) return;
+
+      const { el, clear, qs, goto, statTile, statusBadge, statusLabel, dataTable, exportButton } = window.ui;
+      const app = document.getElementById('app');
+
+      function fail(message) {
+        clear(app).appendChild(el('div', { class: 'empty', text: message }));
+      }
+
+      // Module lifecycle status (Not Started / In Progress / Completed / Cancelled /
+      // Inactive) isn't part of the billing-status API - it's fetched per-project from
+      // the existing Project Utilization endpoint and merged in here by moduleId.
+      const STATUS_ROW_CLASS = {
+        NOT_STARTED: 'status-not-started',
+        IN_PROGRESS: 'status-in-progress',
+        COMPLETED: 'status-completed',
+        CANCELLED: 'status-cancelled',
+        INACTIVE: 'status-inactive',
+      };
+      // Deleted projects/modules keep showing up in these tables but their status
+      // can't be fetched (they're excluded from the project utilization endpoint),
+      // so they fall through with no matching class and stay uncolored - that's
+      // intentional, not a bug, so the legend calls it out by name.
+      const STATUS_LEGEND = ['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'INACTIVE', 'DELETED'];
+      const LEGEND_LABELS = { DELETED: 'Deleted' };
+
+      async function fetchModuleStatusMap(modules) {
+        const projectIds = [...new Set(modules.map((m) => m.projectId).filter((id) => id != null))];
+        const results = await Promise.allSettled(
+          projectIds.map((id) => window.api.get('/api/reports/projects/' + id)));
+        const map = new Map();
+        results.forEach((res) => {
+          if (res.status === 'fulfilled') {
+            (res.value.modules || []).forEach((m) => map.set(m.id, m.status));
+          }
+        });
+        return map;
+      }
+
+      function colorLegend() {
+        return el('div', { class: 'row-legend' }, STATUS_LEGEND.map((status) =>
+          el('span', { class: 'item' }, [
+            el('span', { class: 'swatch status-' + status.toLowerCase().replace(/_/g, '-') }),
+            LEGEND_LABELS[status] || statusLabel(status),
+          ])));
+      }
+
+      async function render() {
+        const [report, projects] = await Promise.all([
+          window.api.get('/api/reports/billing-status?includeDeleted=true'),
+          window.api.get('/api/reports/projects'),
+        ]);
+        const moduleStatus = await fetchModuleStatusMap(report.modules || []);
+        // The billing-status API only carries the numeric project PK - the Excel
+        // export needs the project_code business identifier instead, so it's
+        // looked up from the projects list fetched above.
+        const projectCodeById = new Map(projects.map((p) => [p.id, p.projectCode]));
+        const filter = qs('status') || 'ALL';
+        clear(app);
+
+        app.appendChild(el('h1', { class: 'page-title', text: 'Billing Status Report' }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Billing state of all project modules, from the existing billing records.' }));
+
+        const summary = report.summary || [];
+
+        app.appendChild(el('div', { class: 'filters' }, [
+          el('div', { class: 'spacer' }),
+          exportButton('billing-status.xlsx', () => {
+            const modules = report.modules || [];
+            // "Billed" here means the same thing the existing billedModules
+            // list already means (category !== NOT_BILLED) - counted per
+            // project rather than filtered, so it can sit alongside every
+            // module row of that project.
+            const billedCountByProject = new Map();
+            for (const m of modules) {
+              if (m.category !== 'NOT_BILLED') {
+                billedCountByProject.set(m.projectId, (billedCountByProject.get(m.projectId) || 0) + 1);
+              }
+            }
+            return [{
+              name: 'Billing Status',
+              headers: ['Project ID', 'Project Name', 'Module', 'Billing Status', 'Billed Modules', 'SPOC'],
+              rows: modules.map((m) => [projectCodeById.get(m.projectId) || m.projectId, m.projectName, m.moduleName,
+                statusLabel(m.category), billedCountByProject.get(m.projectId) || 0, m.spocName || '']),
+            }];
+          }),
+        ]));
+        const countOf = (category) => {
+          const entry = summary.find((s) => s.category === category);
+          return entry ? entry.count : 0;
+        };
+
+        // Status cards
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Not billed', String(countOf('NOT_BILLED')), 'not started / WIP / ready'),
+          statTile('Billed', String(countOf('BILLED')), 'invoice raised or fully paid'),
+          statTile('Partly paid', String(countOf('PARTLY_PAID')), 'part payment received'),
+          statTile('Total modules', String((report.modules || []).length)),
+        ]));
+
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        // Billing distribution (part-to-whole, 3 slices)
+        window.charts.card(grid, {
+          title: 'Billing distribution',
+          sub: 'Modules by billing category',
+          config: window.charts.doughnutConfig([
+            { label: 'Not billed', value: countOf('NOT_BILLED'), slot: 0 },
+            { label: 'Billed', value: countOf('BILLED'), slot: 1 },
+            { label: 'Partly paid', value: countOf('PARTLY_PAID'), slot: 2 },
+          ]),
+          table: {
+            headers: ['Category', 'Modules'],
+            rows: summary.map((s) => [statusLabel(s.category), s.count]),
+          },
+        });
+
+        // Granular status breakdown (bar, single series)
+        const statusOrder = ['NOT_STARTED', 'WIP', 'READY', 'BILLED', 'PARTLY_PAID', 'PAID'];
+        const byStatus = statusOrder.map((status) =>
+          (report.modules || []).filter((m) => m.billingStatus === status).length);
+        window.charts.card(grid, {
+          title: 'Modules by billing status',
+          scrollX: true,
+          minWidthPerCategory: 90,
+          config: window.charts.barConfig(
+            statusOrder.map(statusLabel),
+            [{ label: 'Modules', data: byStatus, slot: 0 }],
+            { xTitle: 'Status', yTitle: 'modules', integer: true, hideXTicks: true }),
+          table: {
+            headers: ['Status', 'Modules'],
+            rows: statusOrder.map((status, i) => [statusLabel(status), byStatus[i]]),
+          },
+        });
+
+        // Filterable module table
+        app.appendChild(el('h2', { class: 'section-title', text: 'All modules' }));
+        const filters = el('div', { class: 'filters' },
+          ['ALL', 'NOT_BILLED', 'BILLED', 'PARTLY_PAID'].map((value) =>
+            el('button', {
+              class: value === filter ? 'primary' : '',
+              onclick: () => goto({ status: value === 'ALL' ? null : value }),
+              text: value === 'ALL' ? 'All' : statusLabel(value),
+            })));
+        app.appendChild(filters);
+        app.appendChild(colorLegend());
+
+        const visible = (report.modules || []).filter((m) => filter === 'ALL' || m.category === filter);
+        const moduleCard = el('div', { class: 'card' });
+        if (!visible.length) {
+          moduleCard.appendChild(el('div', { class: 'empty', text: 'No modules in this category.' }));
+        } else {
+          const table = dataTable(
+            ['Module', 'Project', 'Status', 'Category', 'SPOC'],
+            visible.map((m) => [m.moduleName, m.projectName, '', statusLabel(m.category), m.spocName || '—']));
+          const rows = table.querySelectorAll('tbody tr');
+          visible.forEach((m, i) => {
+            const cell = rows[i].children[2];
+            cell.textContent = '';
+            cell.appendChild(statusBadge(m.billingStatus));
+            const rowClass = STATUS_ROW_CLASS[moduleStatus.get(m.moduleId)];
+            if (rowClass) rows[i].classList.add(rowClass);
+          });
+          moduleCard.appendChild(table);
+        }
+        app.appendChild(moduleCard);
+
+        // Billed modules with SPOC
+        app.appendChild(el('h2', { class: 'section-title', text: 'Billed modules & SPOC details' }));
+        app.appendChild(colorLegend());
+        const billedCard = el('div', { class: 'card' });
+        const billed = report.billedModules || [];
+        if (!billed.length) {
+          billedCard.appendChild(el('div', { class: 'empty', text: 'No billed modules yet.' }));
+        } else {
+          const table = dataTable(
+            ['Module', 'Project', 'Status', 'SPOC', 'Last updated'],
+            billed.map((m) => [m.moduleName, m.projectName, '', m.spocName || '—',
+              m.updatedAt ? new Date(m.updatedAt).toLocaleString() : '—']));
+          const rows = table.querySelectorAll('tbody tr');
+          billed.forEach((m, i) => {
+            const cell = rows[i].children[2];
+            cell.textContent = '';
+            cell.appendChild(statusBadge(m.status));
+            const rowClass = STATUS_ROW_CLASS[moduleStatus.get(m.moduleId)];
+            if (rowClass) rows[i].classList.add(rowClass);
+          });
+          billedCard.appendChild(table);
+        }
+        app.appendChild(billedCard);
+      }
+
+      render().catch((e) => fail(e.message));
+    })();
+  </script>
+</body>
+</html>

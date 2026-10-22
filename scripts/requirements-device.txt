@@ -1,0 +1,2 @@
+# Optional physical Android test tooling; not a backend runtime dependency.
+uiautomator2==3.7.0

@@ -1,0 +1,26 @@
+{
+  "name": "crompton-reports",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "browser:build": "tsc --ignoreConfig src/browser/api.ts src/browser/files.ts --target ES2020 --module preserve --moduleResolution bundler --outDir public/assets/js --skipLibCheck --strict",
+    "predev": "npm run browser:build",
+    "prebuild": "npm run browser:build"
+  },
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "eslint": "latest",
+    "typescript": "latest"
+  }
+}

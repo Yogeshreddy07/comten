@@ -1,0 +1,1 @@
+{"indexes":[{"collectionGroup":"modules","queryScope":"COLLECTION","fields":[{"fieldPath":"projectId","order":"ASCENDING"},{"fieldPath":"memberIds","arrayConfig":"CONTAINS"}]}],"fieldOverrides":[]}

@@ -1,0 +1,152 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signed() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/employees/$(request.auth.uid)).data; }
+    function active() { return signed() && profile().active == true; }
+    function manager() { return active() && profile().role in ['CAPTAIN','PROJECT_CONTROLLER']; }
+    function owner(id) { return active() && string(profile().id) == string(id); }
+    function bounded() { return request.query.limit != null && request.query.limit <= 200; }
+    function dayId(d) { return profile().id * 100000000 + d.year() * 10000 + d.month() * 100 + d.day(); }
+    function pad(n) { return n < 10 ? '0' + string(n) : string(n); }
+    function iso(d) { return string(d.year()) + '-' + pad(d.month()) + '-' + pad(d.day()); }
+    function today() { return (request.time + duration.value(330, 'm')).date(); }
+    function ledgerValid(data) {
+      let entry = getAfter(/databases/$(database)/documents/work-logs/$(data.lastEntryId)).data;
+      return owner(data.employeeId) && entry.employeeId == data.employeeId && entry.workDate == data.workDate
+        && data.workDate == iso(data.dayTimestamp)
+        && !exists(/databases/$(database)/documents/work-logs/$(data.lastEntryId))
+        && data.lastEntrySeconds == entry.billableDurationSeconds + entry.nonBillableDurationSeconds;
+    }
+    function validWorkModule(data) {
+      let m = get(/databases/$(database)/documents/modules/$(string(data.moduleId))).data;
+      let p = get(/databases/$(database)/documents/projects/$(string(data.projectId))).data;
+      return m.active == true && m.get('deleted', false) == false && p.active == true && p.get('deleted', false) == false
+        && m.get('status', 'IN_PROGRESS') == 'IN_PROGRESS'
+        && (m.get('startDate', null) == null || data.workDate >= m.startDate)
+        && (m.get('endDate', null) == null || data.workDate <= m.endDate);
+    }
+    function leads(employeeId) {
+      return active() && profile().role == 'TEAM_LEADER'
+        && profile().id in get(/databases/$(database)/documents/employees/$(string(employeeId))).data.get('teamLeadIds', []);
+    }
+    function member(projectId) {
+      return active() && (manager() || profile().id in get(/databases/$(database)/documents/projects/$(string(projectId))).data.memberIds);
+    }
+    match /employees/{id} {
+      allow get: if active() && (manager() || id == request.auth.uid || int(id) in profile().get('peerIds', []));
+      allow list: if manager() && bounded();
+      allow write: if false;
+    }
+    match /projects/{id} {
+      allow get: if member(id);
+      allow list: if active() && bounded() && (manager() || profile().id in resource.data.memberIds);
+      allow create: if false;
+      allow update: if manager() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['projectName','clientId'])
+        && request.resource.data.projectName is string && request.resource.data.projectName.size() > 0 && request.resource.data.projectName.size() <= 1000;
+      allow delete: if false;
+    }
+    match /modules/{id} {
+      allow get: if active() && (manager() || profile().id in resource.data.memberIds);
+      allow list: if active() && bounded() && (manager() || profile().id in resource.data.memberIds);
+      // Assignments, budgets and module creation require cross-document authority.
+      allow write: if false;
+    }
+    match /activities/{id} {
+      allow read: if active() && (request.method == 'get' || bounded());
+      allow create, update: if manager() && request.resource.data.keys().hasOnly(['id','name','active'])
+        && request.resource.data.id == int(id) && request.resource.data.active is bool
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 1000;
+    }
+    match /attendance/{id} {
+      allow get: if active() && (manager() || owner(int(int(id) / 100000000)) || leads(int(int(id) / 100000000)));
+      allow list: if active() && bounded() && (manager() || owner(resource.data.employeeId) || leads(resource.data.employeeId));
+      allow create: if owner(request.resource.data.employeeId)
+        && id == string(dayId(request.resource.data.dayTimestamp))
+        && request.resource.data.id == int(id)
+        && request.resource.data.dayTimestamp == today()
+        && request.resource.data.attendanceDate == iso(today())
+        && request.resource.data.keys().hasOnly(['id','employeeId','employeeCode','employeeName','attendanceType','attendanceDate','dayTimestamp','inTime','outTime','latitude','longitude','locationName'])
+        && request.resource.data.inTime == request.time && request.resource.data.outTime == null
+        && request.resource.data.latitude is number && request.resource.data.latitude >= -90 && request.resource.data.latitude <= 90
+        && request.resource.data.longitude is number && request.resource.data.longitude >= -180 && request.resource.data.longitude <= 180;
+      allow update: if owner(resource.data.employeeId) && resource.data.outTime == null
+        && request.resource.data.outTime == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['outTime','checkOutLatitude','checkOutLongitude','checkOutLocationName','checkOutAttendanceType'])
+        && request.resource.data.checkOutLatitude >= -90 && request.resource.data.checkOutLatitude <= 90
+        && request.resource.data.checkOutLongitude >= -180 && request.resource.data.checkOutLongitude <= 180;
+      allow delete: if false;
+    }
+    match /work-logs/{id} {
+      allow get: if active() && (!exists(/databases/$(database)/documents/work-logs/$(id)) || manager() || owner(resource.data.employeeId) || profile().id == resource.data.teamLeadId);
+      allow list: if active() && bounded() && (manager() || owner(resource.data.employeeId) || profile().id == resource.data.teamLeadId);
+      allow create: if owner(request.resource.data.employeeId)
+        && request.resource.data.id == int(id)
+        && request.resource.data.dayId == dayId(request.resource.data.dayTimestamp)
+        && validWorkModule(request.resource.data)
+        && request.resource.data.workDate == iso(request.resource.data.dayTimestamp)
+        && request.resource.data.dayTimestamp <= today()
+        && request.resource.data.dayTimestamp.dayOfWeek() != 7
+        && today().dayOfWeek() != 7
+        && request.resource.data.dayTimestamp >= today() - duration.value(today().dayOfWeek() - 1, 'd')
+        && profile().id in get(/databases/$(database)/documents/modules/$(string(request.resource.data.moduleId))).data.memberIds
+        && request.resource.data.billableActivityIds.toSet().hasOnly(get(/databases/$(database)/documents/modules/$(string(request.resource.data.moduleId))).data.get('billableActivityIds', []))
+        && request.resource.data.nonBillableActivityIds.toSet().hasOnly(get(/databases/$(database)/documents/modules/$(string(request.resource.data.moduleId))).data.get('nonBillableActivityIds', []))
+        && (request.resource.data.billableActivityIds.size() > 0) == (request.resource.data.billableDurationSeconds > 0)
+        && (request.resource.data.nonBillableActivityIds.size() > 0) == (request.resource.data.nonBillableDurationSeconds > 0)
+        && getAfter(/databases/$(database)/documents/work-log-days/$(string(dayId(request.resource.data.dayTimestamp)))).data.lastEntryId == id
+        && member(request.resource.data.projectId)
+        && request.resource.data.moduleId is int
+        && get(/databases/$(database)/documents/modules/$(string(request.resource.data.moduleId))).data.projectId == request.resource.data.projectId
+        && get(/databases/$(database)/documents/modules/$(string(request.resource.data.moduleId))).data.teamLeadId == request.resource.data.teamLeadId
+        && request.resource.data.approvalStatus == 'PENDING'
+        && request.resource.data.billableDurationSeconds is int && request.resource.data.billableDurationSeconds >= 0
+        && request.resource.data.nonBillableDurationSeconds is int && request.resource.data.nonBillableDurationSeconds >= 0
+        && request.resource.data.billableDurationSeconds + request.resource.data.nonBillableDurationSeconds > 0
+        && request.resource.data.billableDurationSeconds + request.resource.data.nonBillableDurationSeconds <= 86400
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasOnly(['id','dayId','dayTimestamp','employeeId','employeeCode','employeeName','moduleId','moduleName','projectId','projectCode','projectName','workDate','workDone','billableDurationSeconds','nonBillableDurationSeconds','billableActivityIds','nonBillableActivityIds','billableActivities','nonBillableActivities','teamLeadId','approvalStatus','createdAt']);
+      allow update, delete: if false;
+    }
+    match /work-log-days/{id} {
+      allow get: if active() && (manager() || owner(int(int(id) / 100000000)));
+      allow create, update: if ledgerValid(request.resource.data)
+        && id == string(dayId(request.resource.data.dayTimestamp))
+        && request.resource.data.keys().hasOnly(['employeeId','dayTimestamp','workDate','totalSeconds','lastEntryId','lastEntrySeconds'])
+        && request.resource.data.totalSeconds == (resource == null ? 0 : resource.data.totalSeconds) + request.resource.data.lastEntrySeconds
+        && request.resource.data.totalSeconds <= ((get(/databases/$(database)/documents/attendance/$(id)).data.outTime == null ? request.time : get(/databases/$(database)/documents/attendance/$(id)).data.outTime) - get(/databases/$(database)/documents/attendance/$(id)).data.inTime).seconds();
+      allow list, delete: if false;
+    }
+    match /notifications/{id} {
+      allow get: if owner(resource.data.userId);
+      allow list: if bounded() && owner(resource.data.userId);
+      allow update: if owner(resource.data.userId) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) && request.resource.data.read == true;
+      allow create: if active()
+        && request.resource.data.type == 'TIMESHEET_SUBMITTED'
+        && request.resource.data.userId == getAfter(/databases/$(database)/documents/work-logs/$(id)).data.teamLeadId
+        && getAfter(/databases/$(database)/documents/work-logs/$(id)).data.employeeId == profile().id
+        && !exists(/databases/$(database)/documents/work-logs/$(id))
+        && request.resource.data.createdAt == request.time && request.resource.data.read == false
+        && request.resource.data.pushPending == true
+        && request.resource.data.keys().hasOnly(['id','userId','title','message','type','moduleId','moduleName','projectId','projectCode','projectName','read','createdAt','pushPending']);
+      allow delete: if false;
+    }
+    match /device-tokens/{id} {
+      allow read, delete: if owner(resource.data.userId);
+      allow create, update: if owner(request.resource.data.userId)
+        && (resource == null || owner(resource.data.userId))
+        && request.resource.data.keys().hasOnly(['userId','token','updatedAt'])
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.token is string && request.resource.data.token.size() > 0 && request.resource.data.token.size() < 4096;
+    }
+    match /settings/{id} {
+      allow read: if active() && id == request.auth.uid;
+      allow write: if active() && id == request.auth.uid && request.resource.data.keys().hasOnly(['notificationsEnabled']);
+    }
+    match /billing/{id} { allow read: if manager(); allow write: if false; }
+    match /{collection}/{id} {
+      allow read: if collection in ['module-change-requests','project-deactivation-requests','billing-status-change-requests'] && active() && (manager() || owner(resource.data.requestedById));
+      allow write: if false;
+    }
+  }
+}

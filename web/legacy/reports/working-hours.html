@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Employee Working Hours Report · Comten Reports</title>
+  <link rel="stylesheet" href="../assets/css/app.css">
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+    window.ROOT = '..';
+  </script>
+  <script src="../assets/js/config.js"></script>
+  <script src="../vendor/chart.umd.js"></script>
+  <script src="../assets/js/api.js"></script>
+  <script src="../assets/js/auth.js"></script>
+  <script src="../assets/js/ui.js"></script>
+  <script src="../assets/js/charts.js"></script>
+  <script src="../assets/js/xlsx.js"></script>
+</head>
+<body>
+  <main id="app"><div class="loading">Loading…</div></main>
+
+  <script>
+    (function () {
+      'use strict';
+      if (!window.ui.initShell('working-hours')) return;
+
+      const { el, clear, qs, goto, fmtH, fmtDate, statTile, meterTile, selectFilter } = window.ui;
+      const app = document.getElementById('app');
+      const employeeId = qs('employee');
+
+      function fail(message) {
+        clear(app).appendChild(el('div', { class: 'empty', text: message }));
+      }
+
+      // --- Weekly/Monthly period selection, shared by the list page's
+      // export and the detail page's report - both resolve a `type` +
+      // `period` pair from the URL down to the from/to dates the existing
+      // /api/reports/working-hours/employees/{id} endpoint already accepts.
+
+      function isoDate(d) {
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      }
+
+      function mondayOf(d) {
+        const day = d.getDay(); // 0=Sun..6=Sat
+        return new Date(d.getFullYear(), d.getMonth(), d.getDate() + (day === 0 ? -6 : 1 - day));
+      }
+
+      function defaultPeriod(type) {
+        const now = new Date();
+        return type === 'weekly' ? isoDate(mondayOf(now)) : now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+      }
+
+      /** Most recent `count` weeks (this week first), each keyed by its Monday. */
+      function weekOptions(count) {
+        const opts = [];
+        let monday = mondayOf(new Date());
+        for (let i = 0; i < count; i++) {
+          const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+          opts.push({
+            value: isoDate(monday),
+            label: fmtDate(isoDate(monday)) + ' – ' + fmtDate(isoDate(sunday)) + ', ' + monday.getFullYear(),
+          });
+          monday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() - 7);
+        }
+        return opts;
+      }
+
+      /** Most recent `count` months (this month first), keyed "YYYY-MM". */
+      function monthOptions(count) {
+        const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+          'July', 'August', 'September', 'October', 'November', 'December'];
+        const opts = [];
+        const now = new Date();
+        let y = now.getFullYear();
+        let m = now.getMonth() + 1;
+        for (let i = 0; i < count; i++) {
+          opts.push({ value: y + '-' + String(m).padStart(2, '0'), label: monthNames[m - 1] + ' ' + y });
+          m -= 1;
+          if (m === 0) { m = 12; y -= 1; }
+        }
+        return opts;
+      }
+
+      /** type/period -> {from, to}, clamped to today exactly like the
+       * Attendance report clamps its own period end. */
+      function periodRange(type, period) {
+        const today = new Date();
+        if (type === 'weekly') {
+          const monday = period ? new Date(period + 'T00:00:00') : mondayOf(today);
+          const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+          return { from: isoDate(monday), to: isoDate(sunday > today ? today : sunday) };
+        }
+        const parts = (period || defaultPeriod('monthly')).split('-');
+        const y = parseInt(parts[0], 10);
+        const m = parseInt(parts[1], 10);
+        const monthStart = new Date(y, m - 1, 1);
+        const monthEnd = new Date(y, m, 0);
+        return { from: isoDate(monthStart), to: isoDate(monthEnd > today ? today : monthEnd) };
+      }
+
+      function periodFilters(type, period, onType, onPeriod) {
+        return [
+          selectFilter('Report type',
+            [{ value: 'monthly', label: 'Monthly' }, { value: 'weekly', label: 'Weekly' }],
+            type, onType),
+          selectFilter(type === 'weekly' ? 'Week' : 'Month',
+            type === 'weekly' ? weekOptions(12) : monthOptions(12),
+            period, onPeriod),
+        ];
+      }
+
+      // Employee ID/Name/Total/Regular/Overtime/Average/Billable/Non-billable/
+      // Utilization for every EMP employee (the list this page already scopes
+      // to) over the selected period - every figure is reused as-is from the
+      // existing per-employee working hours report the detail page also uses.
+      async function downloadWorkingHoursExcel(employees, type, period) {
+        const { from, to } = periodRange(type, period);
+        try {
+          const reports = await Promise.all(employees.map((emp) =>
+            window.api.get('/api/reports/working-hours/employees/' + emp.id + '?from=' + from + '&to=' + to)));
+          const rows = reports.map((r) => [r.employee.employeeCode, r.employee.name, r.approvedLoggedHours,
+            r.regularHours, r.overtimeHours, r.averageHoursPerDay, r.billableHours, r.nonBillableHours,
+            r.utilizationPercentage]);
+          window.xlsxExport.download(
+            'working-hours-' + from + '-to-' + to + '.xlsx',
+            [{
+              name: 'Working Hours',
+              headers: ['Employee ID', 'Employee Name', 'Total Working Hours', 'Regular Hours', 'Overtime Hours',
+                'Average Working Hours per Day', 'Billable Hours', 'Non-billable Hours', 'Effective Utilization (%)'],
+              rows: rows,
+            }]);
+        } catch (e) {
+          alert('Excel export failed: ' + e.message);
+        }
+      }
+
+      async function renderList() {
+        const employees = await window.api.get('/api/reports/working-hours/employees');
+        clear(app);
+        app.appendChild(el('h1', { class: 'page-title', text: 'Employee Working Hours Report' }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Employees with attendance records. Select one to open their working hours report.' }));
+
+        const type = qs('type') === 'weekly' ? 'weekly' : 'monthly';
+        const period = qs('period') || defaultPeriod(type);
+
+        const grid = el('div', { class: 'grid cols-3' });
+        const search = el('input', {
+          type: 'search', placeholder: 'Search by name or code…',
+          oninput: (ev) => draw(ev.target.value.toLowerCase()),
+        });
+        app.appendChild(el('div', { class: 'filters' }, [
+          el('label', null, ['Search', search]),
+          ...periodFilters(type, period,
+            (v) => goto({ type: v, period: null }),
+            (v) => goto({ period: v })),
+          el('div', { class: 'spacer' }),
+          el('button', {
+            class: 'export-btn',
+            title: 'Download the working hours report for the selected period as an Excel (.xlsx) file',
+            onclick: () => downloadWorkingHoursExcel(employees, type, period),
+            text: '⬇ Excel',
+          }),
+        ]));
+        app.appendChild(grid);
+
+        function draw(query) {
+          clear(grid);
+          const filtered = employees.filter((emp) =>
+            !query || emp.name.toLowerCase().includes(query) || emp.employeeCode.toLowerCase().includes(query));
+          if (!filtered.length) {
+            grid.appendChild(el('div', { class: 'empty', text: 'No employees found.' }));
+            return;
+          }
+          for (const emp of filtered) {
+            grid.appendChild(el('a', {
+              class: 'card list-card', href: '?employee=' + emp.id,
+            }, [
+              el('div', { class: 'title', text: emp.name }),
+              el('div', { class: 'meta', text: emp.employeeCode + (emp.role ? ' · ' + emp.role : '') }),
+            ]));
+          }
+        }
+        draw('');
+      }
+
+      async function renderDetail() {
+        const type = qs('type') === 'weekly' ? 'weekly' : 'monthly';
+        const period = qs('period') || defaultPeriod(type);
+        const { from, to } = periodRange(type, period);
+
+        const [employees, report] = await Promise.all([
+          window.api.get('/api/reports/working-hours/employees'),
+          window.api.get('/api/reports/working-hours/employees/' + employeeId + '?from=' + from + '&to=' + to),
+        ]);
+        clear(app);
+
+        app.appendChild(el('a', { class: 'back-link', href: 'working-hours.html', text: '← All employees' }));
+        app.appendChild(el('h1', { class: 'page-title', text: report.employee.name }));
+        app.appendChild(el('p', { class: 'page-sub', text: report.employee.employeeCode + ' · Working hours report' }));
+
+        // Filter row
+        app.appendChild(el('div', { class: 'filters' }, [
+          selectFilter('Employee',
+            employees.map((emp) => ({ value: emp.id, label: emp.name + ' (' + emp.employeeCode + ')' })),
+            employeeId, (v) => goto({ employee: v })),
+          ...periodFilters(type, period,
+            (v) => goto({ type: v, period: null }),
+            (v) => goto({ period: v })),
+          el('div', { class: 'spacer' }),
+        ]));
+
+        // KPI row
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Total working hours', fmtH(report.approvedLoggedHours), 'approved timesheet logs · ' + from + ' → ' + to),
+          statTile('Regular hours', fmtH(report.regularHours), 'up to 9 h 30 m per day'),
+          statTile('Overtime hours', fmtH(report.overtimeHours), 'beyond 9 h 30 m per day'),
+          statTile('Average per day', fmtH(report.averageHoursPerDay), 'across present days'),
+          meterTile('Effective utilization', report.utilizationPercentage, 'billable ÷ total working hours'),
+        ]));
+
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        // Daily regular vs overtime (stacked bar, 2 series)
+        const daily = report.daily || [];
+        window.charts.card(grid, {
+          title: 'Daily working hours',
+          sub: 'Regular vs overtime, from attendance records',
+          scrollX: true,
+          minWidthPerCategory: 70,
+          config: window.charts.barConfig(
+            daily.map((d) => fmtDate(d.date)),
+            [
+              { label: 'Regular', data: daily.map((d) => d.regularHours), slot: 0 },
+              { label: 'Overtime', data: daily.map((d) => d.overtimeHours), slot: 1 },
+            ],
+            { stacked: true, xTitle: 'Date', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Date', 'Total', 'Regular', 'Overtime'],
+            rows: daily.map((d) => [fmtDate(d.date), d.totalHours, d.regularHours, d.overtimeHours]),
+            formatters: { 1: fmtH, 2: fmtH, 3: fmtH },
+          },
+        });
+
+        // Billable vs non-billable (horizontal bar comparison)
+        window.charts.card(grid, {
+          title: 'Billable vs non-billable hours',
+          sub: 'From billable / non-billable work log records',
+          config: window.charts.barConfig(
+            ['Billable', 'Non-billable'],
+            [{ label: 'Hours', data: [report.billableHours, report.nonBillableHours], slot: 0 }],
+            { horizontal: true, hours: true }),
+          table: {
+            headers: ['Category', 'Hours'],
+            rows: [
+              ['Billable', fmtH(report.billableHours)],
+              ['Non-billable', fmtH(report.nonBillableHours)],
+              ['Effective utilization %', report.utilizationPercentage],
+            ],
+          },
+        });
+
+        // Weekly hours (bar, single series)
+        const weekly = report.weekly || [];
+        window.charts.card(grid, {
+          title: 'Weekly working hours',
+          sub: 'Week starting Monday',
+          scrollX: true,
+          minWidthPerCategory: 70,
+          config: window.charts.barConfig(
+            weekly.map((w) => fmtDate(w.weekStart)),
+            [{ label: 'Hours', data: weekly.map((w) => w.hours), slot: 0 }],
+            { xTitle: 'Week', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Week starting', 'Hours'],
+            rows: weekly.map((w) => [fmtDate(w.weekStart), w.hours]),
+            formatters: { 1: fmtH },
+          },
+        });
+
+        // Monthly hours (line, single series)
+        const monthly = report.monthly || [];
+        window.charts.card(grid, {
+          title: 'Monthly working hours',
+          config: window.charts.lineConfig(
+            monthly.map((m) => m.month),
+            [{ label: 'Hours', data: monthly.map((m) => m.hours), slot: 0 }],
+            { yTitle: 'hours' }),
+          table: {
+            headers: ['Month', 'Hours'],
+            rows: monthly.map((m) => [m.month, m.hours]),
+            formatters: { 1: fmtH },
+          },
+        });
+      }
+
+      (employeeId ? renderDetail() : renderList()).catch((e) => fail(e.message));
+    })();
+  </script>
+</body>
+</html>

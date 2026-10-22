@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Project Time Utilization Report · Comten Reports</title>
+  <link rel="stylesheet" href="../assets/css/app.css">
+  <script>
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+    window.ROOT = '..';
+  </script>
+  <script src="../assets/js/config.js"></script>
+  <script src="../vendor/chart.umd.js"></script>
+  <script src="../assets/js/api.js"></script>
+  <script src="../assets/js/auth.js"></script>
+  <script src="../assets/js/ui.js"></script>
+  <script src="../assets/js/charts.js"></script>
+  <script src="../assets/js/xlsx.js"></script>
+</head>
+<body>
+  <main id="app"><div class="loading">Loading…</div></main>
+
+  <script>
+    (function () {
+      'use strict';
+      if (!window.ui.initShell('project-utilization')) return;
+
+      const { el, clear, qs, goto, fmtH, fmtPct, statTile, meterTile, statusBadge, dataTable, selectFilter, exportButton } = window.ui;
+      const app = document.getElementById('app');
+      const projectId = qs('project');
+      const moduleId = qs('module');
+
+      // Extra Excel columns appended to every sheet of every Project Timing export.
+      const EXTRA_HEADERS = ['Team Lead Name', 'Team Lead ID', 'Project Start Date', 'Project End Date',
+        'Working Hrs Allotted', 'Working Hrs Utilized', 'Non-Billable Hrs', 'Billable Hrs'];
+
+      // "Team Lead ID" is the team lead's employeeCode, not the numeric user id the
+      // report API returns - looked up via /api/employees?role=TEAM_LEADER (the same
+      // endpoint the employee-management screens use), since the report endpoints
+      // don't carry employeeCode for team leads.
+      async function fetchTeamLeadCodes() {
+        const leads = await window.api.get('/api/employees?role=TEAM_LEADER');
+        return new Map((leads || []).map((u) => [u.id, u.employeeCode]));
+      }
+      function extraCols(p, teamLeadCodes) {
+        const ids = (p.teamLeadIds || '').split(',').map((s) => s.trim()).filter(Boolean)
+          .map((id) => teamLeadCodes.get(Number(id)) || id).join(', ');
+        return [p.teamLeadNames || '', ids, p.startDate || '', p.endDate || '',
+          p.plannedHours, p.actualHours, p.nonBillableHours, p.billableHours];
+      }
+      function extraColsModule(m, teamLeadCodes) {
+        const code = m.teamLeadId != null ? (teamLeadCodes.get(m.teamLeadId) || m.teamLeadId) : '';
+        return [m.teamLeadName || '', code, m.startDate || '', m.endDate || '',
+          m.plannedHours, m.actualHours, m.nonBillableHours, m.billableHours];
+      }
+
+      // Timeline History - shows only past End Date / Estimated Hours changes (Captain-approved
+      // module change requests), never the current values. Project and module detail pages only.
+      const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      function fmtLongDate(isoDate) {
+        if (!isoDate) return null;
+        const [y, mo, d] = isoDate.slice(0, 10).split('-').map(Number);
+        return d + ' ' + MONTHS[mo - 1] + ' ' + y;
+      }
+      function fmtDurationHrs(minutes) {
+        if (minutes == null) return null;
+        const h = Math.floor(minutes / 60);
+        const m = minutes % 60;
+        return m === 0 ? (h + ' hrs') : (h + 'h ' + m + 'm');
+      }
+      async function fetchModuleHistory(moduleId) {
+        const requests = await window.api.get('/api/module-change-requests?moduleId=' + moduleId);
+        return (requests || [])
+          .filter((r) => r.status === 'APPROVED')
+          .sort((a, b) => new Date(a.decidedAt) - new Date(b.decidedAt));
+      }
+      /** changes: approved ModuleChangeRequestResponse rows, oldest first. opts.showModule tags each entry with its module (project-level view spans several modules). */
+      function renderTimelineHistory(container, changes, opts) {
+        const showModule = opts && opts.showModule;
+        container.appendChild(el('h2', { class: 'section-title', text: 'Timeline History' }));
+        if (!changes.length) {
+          container.appendChild(el('div', { class: 'empty', text: 'No timeline changes have been made yet.' }));
+          return;
+        }
+        container.appendChild(el('div', { class: 'history-list' }, changes.map((c, i) => {
+          const rows = [];
+          if (c.proposedEndDate) {
+            rows.push(el('div', { class: 'history-row' }, [
+              el('span', { class: 'history-key', text: 'End Date' }),
+              el('span', { class: 'history-val', text: fmtLongDate(c.proposedEndDate) }),
+            ]));
+          }
+          const minutes = c.proposedEstimatedMinutes != null ? c.proposedEstimatedMinutes
+            : (c.proposedEstimatedHours != null ? c.proposedEstimatedHours * 60 : null);
+          if (minutes != null) {
+            rows.push(el('div', { class: 'history-row' }, [
+              el('span', { class: 'history-key', text: 'Estimated Working Hours' }),
+              el('span', { class: 'history-val', text: fmtDurationHrs(minutes) }),
+            ]));
+          }
+          const metaBits = [];
+          if (showModule && c.moduleName) metaBits.push(c.moduleName);
+          if (c.decidedAt) metaBits.push(fmtLongDate(c.decidedAt));
+          return el('div', { class: 'history-item' }, [
+            el('div', { class: 'history-head' }, [
+              el('span', { class: 'history-index', text: String(i + 1) }),
+              el('span', { class: 'history-title', text: 'Timeline Change ' + (i + 1) }),
+              metaBits.length ? el('span', { class: 'history-meta', text: metaBits.join(' · ') }) : null,
+            ]),
+            el('div', { class: 'history-body' }, rows),
+          ]);
+        })));
+      }
+
+      function fail(message) {
+        clear(app).appendChild(el('div', { class: 'empty', text: message }));
+      }
+
+      function progressRow(planned, actual, remaining, pct) {
+        const meter = el('div', { class: 'meter' }, [el('span')]);
+        meter.firstChild.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+        return el('div', null, [
+          el('div', { class: 'meta', text: fmtH(actual) + ' of ' + fmtH(planned) + ' · ' + fmtH(remaining) + ' remaining · ' + fmtPct(pct) + ' billable progress' }),
+          meter,
+        ]);
+      }
+
+      async function renderProjects() {
+        const projects = await window.api.get('/api/reports/projects');
+        clear(app);
+        app.appendChild(el('h1', { class: 'page-title', text: 'Project Time Utilization Report' }));
+        app.appendChild(el('p', { class: 'page-sub', text: 'Select a project to view utilization at project and module level.' }));
+
+        if (!projects.length) {
+          app.appendChild(el('div', { class: 'empty', text: 'No projects found.' }));
+          return;
+        }
+        const teamLeadCodes = await fetchTeamLeadCodes();
+        app.appendChild(el('div', { class: 'filters' }, [
+          el('div', { class: 'spacer' }),
+          exportButton('project-time-utilization.xlsx', async () => {
+            // One row per module, across every project - Planned/Billable/Non-Billable/
+            // Remaining/Progress and the dates are all module-level values, not project
+            // aggregates, so each project's modules are fetched individually.
+            const details = await Promise.all(
+              projects.map((p) => window.api.get('/api/reports/projects/' + p.id)));
+            const rows = [];
+            projects.forEach((p, i) => {
+              (details[i].modules || []).forEach((m) => {
+                const code = m.teamLeadId != null ? (teamLeadCodes.get(m.teamLeadId) || m.teamLeadId) : '';
+                // "Total Hours Spent" is Billable + Non-Billable - unlike plannedHours/
+                // billableHours/nonBillableHours, there's no server-computed field for the
+                // true total (the report API's actualHours is Billable-only).
+                const totalSpent = Math.round((m.billableHours + m.nonBillableHours) * 100) / 100;
+                rows.push([p.projectName, p.projectCode, m.moduleName, m.plannedHours, m.billableHours,
+                  m.nonBillableHours, totalSpent, m.remainingHours, m.progressPercentage,
+                  m.startDate || '', m.endDate || '', m.teamLeadName || '', code]);
+              });
+            });
+            // One row per (module, employee) - Billable/Non-Billable/Total Hours Spent are that
+            // employee's own split within that module, from the same per-module work logs the
+            // Projects sheet's module totals are built from.
+            const employeeRows = [];
+            projects.forEach((p, i) => {
+              (details[i].modules || []).forEach((m) => {
+                (m.employeeHours || []).forEach((emp) => {
+                  const totalSpent = Math.round((emp.billableHours + emp.nonBillableHours) * 100) / 100;
+                  employeeRows.push([emp.name, emp.employeeCode, p.projectName, m.moduleName,
+                    emp.billableHours, emp.nonBillableHours, totalSpent, m.teamLeadName || '',
+                    m.startDate || '', m.endDate || '']);
+                });
+              });
+            });
+            return [{
+              name: 'Projects',
+              headers: ['Project', 'Project Code', 'Module', 'Planned Hours', 'Billable Hrs',
+                'Non-Billable Hrs', 'Total Hours Spent', 'Remaining Hours', 'Billable Progress %',
+                'Module Start Date', 'Module End Date', 'Team Lead Name', 'Team Lead ID'],
+              rows: rows,
+            }, {
+              name: 'Employee-wise Hours',
+              headers: ['Employee', 'Code', 'Project', 'Module', 'Billable Hrs', 'Non-Billable Hrs',
+                'Total Hours Spent', 'Team Lead Name', 'Module Start Date', 'Module End Date'],
+              rows: employeeRows,
+            }];
+          }),
+        ]));
+        app.appendChild(el('div', { class: 'grid cols-3' }, projects.map((p) =>
+          el('a', { class: 'card list-card', href: '?project=' + p.id }, [
+            el('div', { class: 'title', text: p.projectName }),
+            el('div', { class: 'meta', text: p.projectCode + ' · ' + p.moduleCount + ' module(s)' }),
+            progressRow(p.plannedHours, p.actualHours, p.remainingHours, p.progressPercentage),
+          ])
+        )));
+      }
+
+      async function renderProject() {
+        const [projects, data, teamLeadCodes] = await Promise.all([
+          window.api.get('/api/reports/projects'),
+          window.api.get('/api/reports/projects/' + projectId),
+          fetchTeamLeadCodes(),
+        ]);
+        const p = data.project;
+        clear(app);
+
+        app.appendChild(el('a', { class: 'back-link', href: 'project-utilization.html', text: '← All projects' }));
+        app.appendChild(el('h1', { class: 'page-title', text: p.projectName }));
+        app.appendChild(el('p', { class: 'page-sub', text: p.projectCode + ' · Time utilization' }));
+
+        // In-page switchers - jump to another project or drill into a module
+        // without going back to the list first.
+        app.appendChild(el('div', { class: 'filters' }, [
+          selectFilter('Project',
+            projects.map((x) => ({ value: x.id, label: x.projectName })),
+            projectId, (v) => goto({ project: v, module: null })),
+          selectFilter('Module',
+            [{ value: '', label: 'All modules' }].concat(
+              (data.modules || []).map((x) => ({ value: x.id, label: x.moduleName }))),
+            '', (v) => { if (v) goto({ module: v }); }),
+          el('div', { class: 'spacer' }),
+          exportButton('project-utilization-' + p.projectCode + '.xlsx', () => [
+            {
+              name: 'Summary',
+              headers: ['Project', 'Code', 'Total Hours Spent', 'Planned Hours', 'Actual Hours',
+                'Remaining Hours', 'Billable Progress %', ...EXTRA_HEADERS],
+              rows: [[p.projectName, p.projectCode, p.actualHours, p.plannedHours, p.actualHours,
+                p.remainingHours, p.progressPercentage, ...extraCols(p, teamLeadCodes)]],
+            },
+            {
+              name: 'Modules',
+              headers: ['Module', 'Team lead', 'Status', 'Planned h', 'Actual h', 'Remaining h', 'Billable Progress %',
+                'Building Classification', 'Structure Classification', 'Number of Floors', 'Area (sq ft)',
+                ...EXTRA_HEADERS],
+              rows: (data.modules || []).map((m) => [m.moduleName, m.teamLeadName || '', window.ui.statusLabel(m.status),
+                m.plannedHours, m.actualHours, m.remainingHours, m.progressPercentage,
+                m.buildingClassification || '', m.structureClassification || '', m.numberOfFloors ?? '', m.area ?? '',
+                ...extraColsModule(m, teamLeadCodes)]),
+            },
+            {
+              name: 'Employee-wise Hours',
+              headers: ['Employee', 'Code', 'Hours', ...EXTRA_HEADERS],
+              rows: (data.employeeHours || []).map((emp) => [emp.name, emp.employeeCode, emp.hours, ...extraCols(p, teamLeadCodes)]),
+            },
+          ]),
+        ]));
+
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Planned hours', fmtH(p.plannedHours), 'estimated across modules'),
+          statTile('Actual hours', fmtH(p.actualHours), 'logged in work logs'),
+          statTile('Remaining hours', fmtH(p.remainingHours)),
+          meterTile('Billable Progress', p.progressPercentage, 'actual vs planned'),
+        ]));
+
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        // Planned vs actual per module (grouped bar, 2 series)
+        const modules = data.modules || [];
+        window.charts.card(grid, {
+          title: 'Planned vs actual hours by module',
+          scrollX: true,
+          minWidthPerCategory: 90,
+          config: window.charts.barConfig(
+            modules.map((m) => m.moduleName),
+            [
+              { label: 'Planned', data: modules.map((m) => m.plannedHours), slot: 0 },
+              { label: 'Actual', data: modules.map((m) => m.actualHours), slot: 1 },
+            ],
+            { xTitle: 'Modules', yTitle: 'hours', hideXTicks: true }),
+          table: {
+            headers: ['Module', 'Planned', 'Actual', 'Remaining', 'Billable Progress %',
+              'Building Classification', 'Structure Classification', 'Number of Floors', 'Area (sq ft)'],
+            rows: modules.map((m) => [m.moduleName, m.plannedHours, m.actualHours, m.remainingHours, m.progressPercentage,
+              m.buildingClassification || '-', m.structureClassification || '-', m.numberOfFloors ?? '-', m.area ?? '-']),
+            formatters: { 1: fmtH, 2: fmtH, 3: fmtH },
+          },
+        });
+
+        // Employee-wise hours (horizontal bar, single series)
+        const employees = data.employeeHours || [];
+        window.charts.card(grid, {
+          title: 'Employee-wise hours',
+          sub: 'Hours contributed to this project',
+          tall: employees.length > 8,
+          config: window.charts.barConfig(
+            employees.map((emp) => emp.name),
+            [{ label: 'Hours', data: employees.map((emp) => emp.hours), slot: 0 }],
+            { horizontal: true, hours: true }),
+          table: {
+            headers: ['Employee', 'Code', 'Hours'],
+            rows: employees.map((emp) => [emp.name, emp.employeeCode, emp.hours]),
+            formatters: { 2: fmtH },
+          },
+        });
+
+        // Modules list (department/module-level drill-down)
+        app.appendChild(el('h2', { class: 'section-title', text: 'Modules' }));
+        if (!modules.length) {
+          app.appendChild(el('div', { class: 'empty', text: 'No modules in this project.' }));
+        } else {
+          app.appendChild(el('div', { class: 'grid cols-3' }, modules.map((m) =>
+            el('a', { class: 'card list-card', href: '?project=' + projectId + '&module=' + m.id }, [
+              el('div', { class: 'title', text: m.moduleName }),
+              el('div', { class: 'meta', text: (m.teamLeadName ? 'Lead: ' + m.teamLeadName + ' · ' : '') + window.ui.statusLabel(m.status) }),
+              progressRow(m.plannedHours, m.actualHours, m.remainingHours, m.progressPercentage),
+            ])
+          )));
+        }
+
+        // Timeline History - approved End Date / Estimated Hours changes across every module in this project.
+        const projectHistory = (await Promise.all(modules.map((mm) => fetchModuleHistory(mm.id))))
+          .flat()
+          .sort((a, b) => new Date(a.decidedAt) - new Date(b.decidedAt));
+        renderTimelineHistory(app, projectHistory, { showModule: true });
+      }
+
+      async function renderModule() {
+        const [projects, projectData, data, teamLeadCodes] = await Promise.all([
+          window.api.get('/api/reports/projects'),
+          window.api.get('/api/reports/projects/' + projectId),
+          window.api.get('/api/reports/projects/' + projectId + '/modules/' + moduleId),
+          fetchTeamLeadCodes(),
+        ]);
+        const m = data.module;
+        clear(app);
+
+        app.appendChild(el('a', { class: 'back-link', href: '?project=' + projectId, text: '← ' + data.projectName }));
+        app.appendChild(el('h1', { class: 'page-title', text: m.moduleName }));
+        const sub = el('p', { class: 'page-sub' }, [data.projectName + ' · ', statusBadge(m.status)]);
+        app.appendChild(sub);
+
+        app.appendChild(el('div', { class: 'filters' }, [
+          selectFilter('Project',
+            projects.map((x) => ({ value: x.id, label: x.projectName })),
+            projectId, (v) => goto({ project: v, module: null })),
+          selectFilter('Module',
+            (projectData.modules || []).map((x) => ({ value: x.id, label: x.moduleName })),
+            moduleId, (v) => goto({ module: v })),
+          el('div', { class: 'spacer' }),
+          exportButton('module-utilization-' + m.moduleName + '.xlsx', () => [
+            {
+              name: 'Summary',
+              headers: ['Project', 'Module', 'Status', 'Total Hours Spent', 'Planned Hours', 'Actual Hours',
+                'Remaining Hours', 'Billable Progress %', 'Building Classification', 'Structure Classification',
+                'Number of Floors', 'Area (sq ft)', ...EXTRA_HEADERS],
+              rows: [[data.projectName, m.moduleName, window.ui.statusLabel(m.status), m.actualHours,
+                m.plannedHours, m.actualHours, m.remainingHours, m.progressPercentage,
+                m.buildingClassification || '', m.structureClassification || '', m.numberOfFloors ?? '', m.area ?? '',
+                ...extraColsModule(m, teamLeadCodes)]],
+            },
+            {
+              name: 'Employee-wise Hours',
+              headers: ['Employee', 'Code', 'Hours', ...EXTRA_HEADERS],
+              rows: (data.employeeHours || []).map((emp) => [emp.name, emp.employeeCode, emp.hours, ...extraColsModule(m, teamLeadCodes)]),
+            },
+            {
+              name: 'Monthly hours',
+              headers: ['Month', 'Hours', ...EXTRA_HEADERS],
+              rows: (data.monthlyHours || []).map((x) => [x.month, x.hours, ...extraColsModule(m, teamLeadCodes)]),
+            },
+          ]),
+        ]));
+
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Planned hours', fmtH(m.plannedHours)),
+          statTile('Actual hours', fmtH(m.actualHours)),
+          statTile('Remaining hours', fmtH(m.remainingHours)),
+          meterTile('Billable Progress', m.progressPercentage, m.startDate && m.endDate ? m.startDate + ' → ' + m.endDate : ''),
+        ]));
+
+        app.appendChild(el('h2', { class: 'section-title', text: 'Building Details' }));
+        app.appendChild(el('div', { class: 'kpis' }, [
+          statTile('Building Classification', m.buildingClassification || '-'),
+          statTile('Structure Classification', m.structureClassification || '-'),
+          statTile('Number of Floors', m.numberOfFloors != null ? String(m.numberOfFloors) : '-'),
+          statTile('Area', m.area != null ? (m.area + ' sq ft') : '-'),
+        ]));
+
+        const grid = el('div', { class: 'grid cols-2' });
+        app.appendChild(grid);
+
+        const employees = data.employeeHours || [];
+        window.charts.card(grid, {
+          title: 'Employee-wise hours',
+          tall: employees.length > 8,
+          config: window.charts.barConfig(
+            employees.map((emp) => emp.name),
+            [{ label: 'Hours', data: employees.map((emp) => emp.hours), slot: 0 }],
+            { horizontal: true, hours: true }),
+          table: {
+            headers: ['Employee', 'Code', 'Hours'],
+            rows: employees.map((emp) => [emp.name, emp.employeeCode, emp.hours]),
+            formatters: { 2: fmtH },
+          },
+        });
+
+        const monthly = data.monthlyHours || [];
+        window.charts.card(grid, {
+          title: 'Hours logged per month',
+          config: window.charts.lineConfig(
+            monthly.map((x) => x.month),
+            [{ label: 'Hours', data: monthly.map((x) => x.hours), slot: 0 }],
+            { yTitle: 'hours' }),
+          table: {
+            headers: ['Month', 'Hours'],
+            rows: monthly.map((x) => [x.month, x.hours]),
+            formatters: { 1: fmtH },
+          },
+        });
+
+        // Timeline History - this module's own approved End Date / Estimated Hours changes.
+        const moduleHistory = await fetchModuleHistory(m.id);
+        renderTimelineHistory(app, moduleHistory, {});
+      }
+
+      (moduleId && projectId ? renderModule() : projectId ? renderProject() : renderProjects())
+        .catch((e) => fail(e.message));
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "594214226228",
+    "project_id": "crompton-pms-dev-20261015",
+    "storage_bucket": "crompton-pms-dev-20261015.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:594214226228:android:8262d4760006f8aa61bd61",
+        "android_client_info": {
+          "package_name": "com.crompton.pms.frontend"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAIOe1p0KmNreS2IgB4GiKQ89uuyGHQfEM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

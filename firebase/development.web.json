@@ -1,0 +1,9 @@
+{
+  "USE_EMULATORS": "false",
+  "FIREBASE_PROJECT_ID": "crompton-pms-dev-20261015",
+  "FIREBASE_API_KEY": "AIzaSyAZqQmW5Pzo1EHJjJ-sXXNBp0eT2hTnfdw",
+  "FIREBASE_APP_ID": "1:594214226228:web:abcaee9ae923a14461bd61",
+  "FIREBASE_SENDER_ID": "594214226228",
+  "FIREBASE_STORAGE_BUCKET": "crompton-pms-dev-20261015.firebasestorage.app",
+  "BASE_URL": "http://127.0.0.1:8007/api"
+}
