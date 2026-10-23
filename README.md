@@ -1,11 +1,49 @@
 # Crompton PMS
 
 Railway backend setup: [step-by-step deployment guide](backend/RAILWAY.md).
-Use repository `Yogeshreddy07/comten`, service root `/backend`, and config file
-`/backend/railway.json`. Private settings can be exported locally with
+Use repository `Yogeshreddy07/comten`, service root `/backend`, its detected
+Dockerfile, and health check `/health`. Private settings can be exported locally with
 `scripts/export-railway-variables.py`; its output stays in ignored `.local/`.
 
-## Tester handoff — 22 October 2026
+## Hosted tester build — 23 October 2026
+
+The development backend is deployed on Railway at
+**https://comten-production.up.railway.app**. Despite Railway's `production`
+environment/domain label, the application uses `ENVIRONMENT=development` and
+the dedicated `crompton-pms-dev-20261015` Firebase project. Project:
+[Crompton Railway service](https://railway.com/project/4a9cfa7b-5a6a-41f5-b5ca-526d4f667cb9/service/f5a3e27b-9840-49e6-8a10-0001c8ca512b).
+
+The new **1.0.1+2 universal Android debug APK** in ignored
+`.local/tester-handoff-2026-10-23/` embeds the public HTTPS API URL. Android 7.0+
+is supported. Its signature, package version, compiled Firebase/API settings,
+and absence of saved backend secrets/test passwords were verified.
+
+Current checks: **84 hosted API/report/permission/private-R2 checks passed**;
+**9 hosted employee provisioning/lifecycle checks passed**; **35 Flutter tests
+passed** and analysis reports no issues. The storage probe's object was deleted;
+the one synthetic provisioning account was soft-deleted and disabled. Evidence
+is in ignored `.local/railway-deployment/`. The previous 70-test backend rerun
+remains recorded in `.local/railway-backend-tests.log`.
+
+Use Log In with `CAP001`, `PC001`, `TL001`, or `EMP001` and the shared tester
+password in `.local/development-logins.json`. Existing synthetic accounts remain
+preverified; their placeholder phone numbers are listed below.
+
+**Ready for tester evaluation of the connected app; full acceptance is not
+certified.** SMS/email/FCM dispatch remains off. Real OTP delivery, a working
+email Agent, real enrolled recipient contacts and installation/launch of this
+APK on tester devices remain unverified. No Android device is connected for
+fresh physical testing. New accounts need an admin-assigned real phone and a
+working OTP provider before phone activation can complete.
+
+Re-run the finite hosted checks (one synthetic storage upload/download/delete;
+no SMS/email):
+
+```powershell
+.\.venv\Scripts\python.exe scripts/verify-hosted-backend.py --url https://comten-production.up.railway.app
+```
+
+## Historical tester handoff — 22 October 2026 (API blocker resolved above)
 
 The four existing synthetic development accounts (`CAP001`, `PC001`, `TL001`,
 `EMP001`) now share the tester password saved in ignored

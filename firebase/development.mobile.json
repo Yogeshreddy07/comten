@@ -4,6 +4,6 @@
     "FIREBASE_API_KEY":  "AIzaSyAIOe1p0KmNreS2IgB4GiKQ89uuyGHQfEM",
     "FIREBASE_APP_ID":  "1:594214226228:android:8262d4760006f8aa61bd61",
     "FIREBASE_SENDER_ID":  "594214226228",
-    "BASE_URL":  "http://10.0.2.2:8007/api",
+    "BASE_URL":  "https://comten-production.up.railway.app/api",
     "FIREBASE_STORAGE_BUCKET":  "crompton-pms-dev-20261015.firebasestorage.app"
 }

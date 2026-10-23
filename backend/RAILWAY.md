@@ -1,6 +1,10 @@
 # Deploy the development backend to Railway
 
 Repository: https://github.com/Yogeshreddy07/comten, branch `main`.
+Current API: https://comten-production.up.railway.app, deployed 23 October 2026.
+The Railway project is `4a9cfa7b-5a6a-41f5-b5ca-526d4f667cb9`; service is
+`f5a3e27b-9840-49e6-8a10-0001c8ca512b`. Root `/backend` and `/health` were
+configured in the dashboard; the Dockerfile was detected automatically.
 This deploys only FastAPI. Flutter, the Next.js website and Firebase rules are
 separate components. Existing development Firebase accounts/data remain in place;
 do not run either seed script on Railway. No SQL database or volume is required.
@@ -9,10 +13,11 @@ do not run either seed script on Railway. No SQL database or volume is required.
    `backend`. Configure it before its first deployment.
 2. Under the service's **Settings**, connect GitHub repo
    `Yogeshreddy07/comten`, branch `main`. Set **Root Directory** to `/backend`
-   and **Config File** to `/backend/railway.json`.
-   The config selects the included Python 3.12 Dockerfile, starts Uvicorn on
-   `0.0.0.0:$PORT`, and uses `/health`. Leave Build Command and Start Command
-   overrides empty. Let Railway supply `PORT`.
+   and **Healthcheck Path** to `/health`. Railway detects the included Python
+   3.12 Dockerfile, which starts Uvicorn on `0.0.0.0:$PORT` (default `8080`).
+   Leave Build Command and Start Command overrides empty. Let Railway supply
+   `PORT`. New services cannot opt into the deprecated Config as Code feature;
+   `railway.json` is retained for legacy services only.
 3. On this development PC, generate the private variable map if needed:
 
    ```powershell
@@ -56,9 +61,11 @@ do not run either seed script on Railway. No SQL database or volume is required.
    Open `https://YOUR-DOMAIN/docs` and test `/api/auth/login` with an existing
    tester employee code and its password. A health response alone does not prove
    Firebase permissions, R2 or OTP delivery.
-8. Send the public HTTPS domain back for APK configuration. Mobile's `BASE_URL`
-   must be `https://YOUR-DOMAIN/api`; the already-built preview APK has an
-   intentional `.invalid` placeholder and needs rebuilding.
+8. Mobile's `BASE_URL` must be `https://YOUR-DOMAIN/api`. Both development Firebase
+   define files now use `https://comten-production.up.railway.app/api`. Build
+   from `mobile/` with `flutter build apk --debug
+   --dart-define-from-file=../firebase/development.mobile.json`. Version 1.0.1+2
+   uses this hosted address; discard the older 22 October `.invalid` preview.
 
 ## OTP and provider activation
 
