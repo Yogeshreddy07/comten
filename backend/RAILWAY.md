@@ -69,6 +69,26 @@ do not run either seed script on Railway. No SQL database or volume is required.
 
 ## OTP and provider activation
 
+SMS is now enabled on the deployed service for the owner's exact approved test
+recipient. `EMP001` was enrolled and verified through a received SMS and the
+hosted verification API on 23 October. `ALLOW_REAL_MESSAGES=true` and
+`MSG91_DISPATCH_ENABLED=true`; email and FCM remain disabled. The private
+`.local/railway-variables.json` reflects these live settings. The export helper
+deliberately generates a fresh dispatch-disabled baseline; do not overwrite
+the live settings from that baseline unintentionally.
+
+For this backend-mediated integration, the dedicated MSG91 widget must use
+**Web** integration. Its **Allow Specific** origin countries include India and
+Netherlands because the Railway service runs in Amsterdam. These are request
+origin countries, not destination phone countries. Recipient permissions are
+still enforced by the backend's exact phone allowlist and enrollment checks.
+See [MSG91 country restrictions](https://msg91.com/help/sendotp/country-wise).
+
+To verify an already-sent SMS without sending another one, set `PMS_TEST_OTP`
+locally and run `scripts/verify-phone-otp.py`. The helper checks hosted OTP
+verification, Firebase session linkage, activation confirmation and replay;
+it persists no OTPs or tokens. Real OTP values must never be committed.
+
 Deploying the API does not enable SMS/email automatically. Use real, enrolled
 test recipients, not placeholder phones or `example.invalid` email addresses.
 An admin must assign the phone number before activation verifies it.

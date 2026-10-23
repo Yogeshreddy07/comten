@@ -26,15 +26,27 @@ is in ignored `.local/railway-deployment/`. The previous 70-test backend rerun
 remains recorded in `.local/railway-backend-tests.log`.
 
 Use Log In with `CAP001`, `PC001`, `TL001`, or `EMP001` and the shared tester
-password in `.local/development-logins.json`. Existing synthetic accounts remain
-preverified; their placeholder phone numbers are listed below.
+password in `.local/development-logins.json`. `EMP001` now has the owner's
+approved test phone (ending 9450), verified through actual hosted SMS OTP.
+The other synthetic accounts retain their preverified placeholder contacts.
 
-**Ready for tester evaluation of the connected app; full acceptance is not
-certified.** SMS/email/FCM dispatch remains off. Real OTP delivery, a working
-email Agent, real enrolled recipient contacts and installation/launch of this
-APK on tester devices remain unverified. No Android device is connected for
-fresh physical testing. New accounts need an admin-assigned real phone and a
-working OTP provider before phone activation can complete.
+**SMS OTP is enabled for the exact approved test recipient.** Actual receipt,
+MSG91 verification, the hosted verification endpoint, Firebase custom-token
+exchange, app activation confirmation, verified profile and consumed-code
+replay rejection passed on 23 October. Anonymous requests, an unenrolled phone,
+resend/rate limits and malformed codes were also rejected. Evidence without
+codes/tokens is in ignored `.local/railway-deployment/otp-live-results.json`.
+The widget needed Web integration for backend requests and India + Netherlands
+request-origin countries (Railway runs in Amsterdam). No APK change was needed.
+Provider failures now log only a safe diagnostic category, not response bodies.
+
+**Ready for tester evaluation; full device acceptance is not certified.** Email
+and FCM dispatch remain off. A working email Agent and installation/launch of
+this APK on tester devices remain unverified. No Android device is connected
+for fresh physical testing. New accounts need an admin-assigned real phone;
+each authorized tester number must be added to `APPROVED_SMS_RECIPIENTS`.
+The backend still requires authentication, enrolled-phone matching and rate
+limits before dispatch. The existing 1.0.1 APK uses these hosted SMS changes.
 
 Re-run the finite hosted checks (one synthetic storage upload/download/delete;
 no SMS/email):
