@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import re
 import secrets
+import logging
 import httpx
 from firebase_admin import messaging
 from fastapi import HTTPException
@@ -94,7 +95,22 @@ async def send_msg91(phone: str):
     phone=normalize_phone(phone);recipient_allowed('msg91',phone)
     headers=widget_config()
     result=await provider_request('POST','https://api.msg91.com/api/v5/widget/sendOtp',headers=headers,json={'widgetId':settings.msg91_widget_id,'identifier':phone})
-    if not provider_success(result): raise HTTPException(502,'SMS widget rejected dispatch')
+    if not provider_success(result):
+        # Classify provider failures for hosted diagnostics without logging
+        # recipient numbers, credentials, request IDs or raw response bodies.
+        try:
+            reason=str(result.json().get('message','')).lower()
+        except (ValueError,AttributeError):
+            reason=''
+        category='PROVIDER_REJECTION'
+        for marker,label in [('web requests','WIDGET_PLATFORM'),('ip','IP_RESTRICTION'),
+                             ('auth','AUTHENTICATION'),('domain','DOMAIN_RESTRICTION'),
+                             ('balance','BALANCE'),('credit','BALANCE'),
+                             ('limit','RATE_LIMIT'),('template','TEMPLATE')]:
+            if marker in reason:
+                category=label;break
+        logging.getLogger('crompton').warning('MSG91 send rejected: HTTP %s; category %s',result.status_code,category)
+        raise HTTPException(502,'SMS widget rejected dispatch')
     request_id=result.json().get('message')
     if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,150}',request_id): raise HTTPException(502,'Invalid SMS widget response')
     return request_id

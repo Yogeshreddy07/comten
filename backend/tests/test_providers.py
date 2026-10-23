@@ -19,6 +19,18 @@ def test_provider_dispatch_disabled_without_network(monkeypatch):
         assert error.value.status_code==503
 
 
+def test_sms_rejection_logs_category_without_sensitive_response(configured,monkeypatch,caplog):
+    async def reject(*args,**kwargs):
+        return httpx.Response(200,json={'type':'error',
+            'message':'Web requests are not allowed for this widget. private-recipient-and-credential'})
+    monkeypatch.setattr(adapters,'provider_request',reject)
+    with pytest.raises(HTTPException):
+        asyncio.run(adapters.send_msg91('919000000000'))
+    assert 'WIDGET_PLATFORM' in caplog.text
+    assert 'private-recipient-and-credential' not in caplog.text
+    assert '919000000000' not in caplog.text
+
+
 @pytest.mark.parametrize('status,payload,expected',[(200,{'type':'success','message':'synthetic-request'},None),(400,{'type':'error'},502),(503,{},502),(200,None,502)])
 def test_sms_send_contract(configured,monkeypatch,status,payload,expected):
     async def fake(method,url,**kw):
