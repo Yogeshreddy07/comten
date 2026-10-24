@@ -149,12 +149,7 @@ async def provision(body: EmployeeCreate, user=Depends(current_user)):
         raise
     record['active'] = True
     record.pop('provisioning', None)
-    from .email_activation import send_activation
-    try:
-        sent = await send_activation(record)
-    except HTTPException:
-        sent = False
-    return ok(record | {'activationEmailSent':sent}, 'Employee created. Email OTP sent for activation.' if sent else 'Employee created, but the activation email could not be sent. Configure email delivery, then request an OTP from Activate Account.')
+    return ok(record | {'activationEmailSent':False}, 'Employee created. Enter the employee code in Activate Account and tap Send OTP to receive the verification email.')
 
 
 @app.post('/api/employees/validate-identity')

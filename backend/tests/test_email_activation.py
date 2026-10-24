@@ -17,8 +17,11 @@ def create(client):
 
 def test_new_account_uses_email_otp_not_temporary_password(client):
     person=create(client);code=person['employeeCode'];uid=str(person['id'])
-    assert 'temporaryPassword' not in person and person['activationEmailSent']
+    assert 'temporaryPassword' not in person and person['activationEmailSent'] is False
     assert person['activationStatus']=='PENDING' and auth.get_user(uid).disabled
+    assert get('email-activation',uid) is None
+    assert client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'}).status_code==401
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==200
     state=get('email-activation',uid)
     assert '123456' not in str(state) and 'otp' not in state
     assert client.post('/api/auth/signup/set-password',json={'employeeCode':code,'signupToken':'forged','newPassword':'ValidPassword123!','confirmPassword':'ValidPassword123!'}).status_code==401
@@ -31,6 +34,7 @@ def test_new_account_uses_email_otp_not_temporary_password(client):
 
 def test_activation_attempts_expiry_recipient_binding_and_proof_replay(client):
     person=create(client);uid=str(person['id']);code=person['employeeCode']
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==200
     request={'employeeCode':code,'otp':'000000'}
     for _ in range(5): assert client.post('/api/auth/signup/verify-otp',json=request).status_code==401
     assert client.post('/api/auth/signup/verify-otp',json=request|{'otp':'123456'}).status_code==401
@@ -53,19 +57,29 @@ def test_activation_attempts_expiry_recipient_binding_and_proof_replay(client):
 
 def test_resend_is_idempotent_during_cooldown(client):
     person=create(client);uid=str(person['id'])
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':person['employeeCode']}).status_code==200
     before=get('email-activation',uid)
     assert client.post('/api/auth/signup/send-otp',json={'employeeCode':person['employeeCode']}).status_code==200
     assert get('email-activation',uid)==before
 
 
 def test_provider_failure_is_visible_and_does_not_lose_created_employee(client,monkeypatch):
-    async def unavailable(*args,**kwargs):raise HTTPException(503,'Synthetic dispatch disabled')
+    deliveries=[]
+    async def unavailable(*args,**kwargs):
+        deliveries.append(True)
+        raise HTTPException(503,'Synthetic dispatch disabled')
     monkeypatch.setattr(email_activation.settings,'environment','development')
     monkeypatch.setattr(email_activation.settings,'recovery_hmac_key','synthetic-development-test-key')
     monkeypatch.setattr(email_activation,'email',unavailable)
     person=create(client)
     assert person['activationEmailSent'] is False
+    assert deliveries==[]
     assert get('employees',person['id'])['activationStatus']=='PENDING'
+    assert get('email-activation',person['id']) is None
+    response=client.post('/api/auth/signup/send-otp',json={'employeeCode':person['employeeCode']})
+    assert response.status_code==503
+    assert 'Unable to send the verification email' in response.json()['message']
+    assert deliveries==[True]
     assert get('email-activation',person['id'])['deliveryState']=='FAILED'
 
 

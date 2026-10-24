@@ -45,7 +45,12 @@ void main(){
       ChangeNotifierProvider(create:(_)=>ThemeViewModel()),
     ], child:const MaterialApp(home:ActivateAccountScreen())));
     expect(find.text('Temporary Password'),findsNothing);
+    expect(repository.sends,0);
+    await tester.tap(find.text('Send OTP'));await tester.pumpAndSettle();
+    expect(repository.sends,0);
     await tester.enterText(find.widgetWithText(TextFormField,'Employee Code'),'EMP010');
+    await tester.pumpAndSettle();
+    expect(repository.sends,0);
     await tester.tap(find.text('Send OTP'));await tester.pumpAndSettle();
     expect(repository.sends,1);
     expect(find.text('Email OTP'),findsOneWidget);

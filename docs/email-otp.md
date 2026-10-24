@@ -1,8 +1,9 @@
 # Email OTP activation and recovery
 
-New employees receive an activation OTP at the enrolled email when created.
-The app's Activate Account screen requests/resends that OTP using the employee
-code, verifies it, then opens password setup and returns to Login. No temporary
+Creating or inviting an employee does not send an activation OTP. The employee
+opens Activate Account, enters their employee code, and taps Send OTP to receive
+it at their registered email. The screen verifies that OTP, then opens password
+setup and returns to Login. No temporary
 password is returned, displayed, emailed or placed in the outbox. Firebase has
 an undisclosed random credential while pending, and the account is disabled.
 Existing activated accounts and passwords are preserved. Legacy accounts that
@@ -38,6 +39,7 @@ background email worker; durable provider claims and Resend idempotency keys
 prevent duplicate dispatch. An uncertain provider response requires review.
 See [Resend idempotency](https://resend.com/docs/dashboard/emails/idempotency-keys).
 
-Account creation reports `activationEmailSent` and clearly reports a delivery
-failure while retaining the created employee. Retry from Activate Account after
-correcting the provider configuration; do not create the employee again.
+Account creation retains `activationEmailSent: false` for client compatibility.
+Delivery failures are reported when Send OTP is tapped in Activate Account.
+Retry there after correcting the provider configuration; do not create the
+employee again.
