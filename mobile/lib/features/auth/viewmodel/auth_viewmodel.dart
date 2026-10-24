@@ -99,6 +99,27 @@ class AuthViewModel extends ChangeNotifier {
     }
   }
 
+  Future<ApiResult> sendActivationOtp(String employeeCode) async {
+    if (_isLoading) return ApiResult(success: false, message: 'Please wait.');
+    _setLoading(true);
+    _signupSession = null;
+    try {
+      return await _repository.sendActivationOtp(employeeCode);
+    } finally { _setLoading(false); }
+  }
+
+  Future<ApiResult> verifyActivationOtp(String employeeCode, String otp) async {
+    if (_isLoading) return ApiResult(success: false, message: 'Please wait.');
+    _setLoading(true);
+    try {
+      final result = await _repository.verifyActivationOtp(employeeCode, otp);
+      if (result.success && result.data is Map<String, dynamic>) {
+        _signupSession = SignupSession.fromJson(result.data);
+      }
+      return result;
+    } finally { _setLoading(false); }
+  }
+
   Future<ApiResult> setPassword({
     required String newPassword,
     required String confirmPassword,
@@ -114,12 +135,14 @@ class AuthViewModel extends ChangeNotifier {
         );
       }
 
-      return await _repository.setPassword(
+      final result = await _repository.setPassword(
         employeeCode: _signupSession!.employeeCode,
         signupToken: _signupSession!.signupToken,
         newPassword: newPassword,
         confirmPassword: confirmPassword,
       );
+      if (result.success) _signupSession = null;
+      return result;
     } finally {
       _setLoading(false);
     }

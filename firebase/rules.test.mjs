@@ -20,6 +20,12 @@ before(async()=>{
  });
 });
 after(async()=>{await env.cleanup()});
+test('pending email activation cannot access Firestore even with a token',async()=>{
+ await env.withSecurityRulesDisabled(async c=>setDoc(doc(c.firestore(),'employees','16'),{id:16,role:'EMPLOYEE',active:true,activationStatus:'PENDING'}));
+ const db=env.authenticatedContext('16').firestore();
+ await assertFails(getDoc(doc(db,'employees','16')));
+ await assertFails(getDocs(query(collection(db,'activities'),limit(10))));
+});
 test('lead picker can read assigned modules without reading employee profiles',async()=>{
  const db=env.authenticatedContext('13').firestore();
  // Historical module members need not be present in the current peer roster.

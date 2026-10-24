@@ -133,10 +133,10 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
 
     if (result.success) {
       final employee=result.data;
-      if(employee is Employee && employee.temporaryPassword!=null) {
+      if(employee is Employee && !widget.isEditMode) {
         await showDialog<void>(context:context,builder:(dialogContext)=>AlertDialog(
           title:const Text('Account created'),
-          content:SelectableText('Employee code: ${employee.employeeCode}\nTemporary password: ${employee.temporaryPassword}\n\nShare these through your approved private channel.'),
+          content:SelectableText('Employee code: ${employee.employeeCode}\n\n${result.message}\n\nThe employee should open Activate Account, verify the email OTP, and set their password.'),
           actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Done'))],
         ));
         if(!context.mounted) return;

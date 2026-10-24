@@ -4,6 +4,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pytest
+from conftest import activate_employee
 from fastapi.testclient import TestClient
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app.main import app
@@ -39,15 +40,17 @@ def test_employee_provisioning_permission_and_activation(tokens):
     response=client.post('/api/employees',json=body,headers=tokens['captain'])
     assert response.status_code==200,response.text
     user=response.json()['data'];uid=user['id']
-    assert client.post('/api/auth/login',json={'employeeCode':body['employeeCode'],'password':user['temporaryPassword']}).status_code==200
-    assert client.post('/api/auth/login',json={'employeeCode':body['email'],'password':user['temporaryPassword']}).status_code==200
+    assert 'temporaryPassword' not in user
+    password=activate_employee(client,user['employeeCode'])
+    assert client.post('/api/auth/login',json={'employeeCode':body['employeeCode'],'password':password}).status_code==200
+    assert client.post('/api/auth/login',json={'employeeCode':body['email'],'password':password}).status_code==200
     assert client.put(f'/api/employees/{uid}',json={'name':'Updated synthetic'},headers=tokens['controller']).status_code==200
     db.collection('employees').document(str(uid)).update({'phoneVerified':True})
     assert client.put(f'/api/employees/{uid}',json={'phone':'9000000000'},headers=tokens['controller']).status_code==200
     assert get('employees',uid)['phoneVerified'] is False
     assert client.put(f'/api/employees/{uid}',json={'role':'CAPTAIN'},headers=tokens['controller']).status_code==403
     assert client.put(f'/api/employees/{uid}/deactivate',headers=tokens['captain']).status_code==200
-    assert client.post('/api/auth/login',json={'employeeCode':body['employeeCode'],'password':user['temporaryPassword']}).status_code==401
+    assert client.post('/api/auth/login',json={'employeeCode':body['employeeCode'],'password':password}).status_code==401
     assert client.put(f'/api/employees/{uid}/activate',headers=tokens['captain']).status_code==200
 
 
@@ -128,6 +131,7 @@ def test_recovery_is_single_use_and_counters_commit(tokens):
     response=client.post('/api/employees',json={'employeeCode':code,'name':'Recovery synthetic','email':'recover@example.invalid','role':'EMPLOYEE'},headers=tokens['captain'])
     assert response.status_code==200,response.text
     uid=response.json()['data']['id']
+    activate_employee(client,code)
     request={'employeeCode':code,'email':'recover@example.invalid'}
     assert client.post('/api/auth/forgot-password/send-otp',json=request).status_code==200
     otp='123456'
@@ -167,6 +171,7 @@ def test_assignment_validation_lifecycle_and_stale_approval(tokens):
 
 def test_reassigned_leader_receives_pending_approval_scope(tokens):
     person=client.post('/api/employees',json={'employeeCode':'LEAD'+uuid.uuid4().hex[:8],'name':'Synthetic replacement lead','email':'lead@example.invalid','role':'TEAM_LEADER'},headers=tokens['controller']).json()['data']
+    password=activate_employee(client,person['employeeCode'])
     p=client.post('/api/projects',json={'projectCode':'MOVE-'+uuid.uuid4().hex[:6],'projectName':'Synthetic reassignment','moduleName':'Design','teamLeadId':3,'memberIds':[4]},headers=tokens['controller']).json()['data']
     m=p['modules'][0];key=str(time.time_ns()//1000)
     db.collection('work-logs').document(key).set({'id':int(key),'employeeId':4,'moduleId':m['id'],'projectId':p['id'],'teamLeadId':3,'workDate':'2026-10-15','approvalStatus':'PENDING','billableDurationSeconds':60,'nonBillableDurationSeconds':0})
@@ -175,7 +180,7 @@ def test_reassigned_leader_receives_pending_approval_scope(tokens):
     assert get('work-logs',key)['teamLeadId']==person['id']
     assert 3 not in get('modules',m['id'])['memberIds']
     assert client.put(f'/api/work-logs/{key}/approve',json={},headers=tokens['lead']).status_code==403
-    replacement=client.post('/api/auth/login',json={'employeeCode':person['employeeCode'],'password':person['temporaryPassword']}).json()['data']['token']
+    replacement=client.post('/api/auth/login',json={'employeeCode':person['employeeCode'],'password':password}).json()['data']['token']
     assert client.put(f'/api/work-logs/{key}/approve',json={},headers={'Authorization':'Bearer '+replacement}).status_code==200
 
 

@@ -3,12 +3,14 @@ from html import escape
 
 
 def render(kind, name, **values):
-    titles={'invitation':'Welcome to Comten - Your Account is Ready','activation':'Your Comten account is active','recovery':'Comten password recovery','security':'Comten account security update','approval':'Comten approval update'}
+    titles={'invitation':'Welcome to Comten - Your Account is Ready','activation_otp':'Comten - Verify your email to activate your account','activation':'Your Comten account is active','recovery':'Comten password recovery','security':'Comten account security update','approval':'Comten approval update'}
     title=titles[kind]
-    if kind=='recovery':
+    if kind=='activation_otp':
+        message=f"Your employee code is {values['code']}. Your email verification OTP is {values['otp']}. It expires in 10 minutes. Enter your employee code in Activate Account, verify the OTP, then set your password and log in. Do not share this code."
+    elif kind=='recovery':
         message=f"Your verification code is {values['otp']}. It expires in 10 minutes. Do not share this code with anyone."
     elif kind=='invitation':
-        message=f"Your employee account {values['code']} has been created. Obtain your temporary password directly from your administrator through an approved channel. Sign in to complete phone verification and setup."
+        message=f"Your employee account {values['code']} has been created. Open Activate Account, enter your employee code and verify the OTP sent to your registered email. Then set your password and log in."
     elif kind=='activation': message='Your account has been activated. Sign in to Comten using your existing credentials.'
     elif kind=='security': message=values.get('message','Your account security settings changed. Contact your administrator immediately if you did not request this change.')
     else: message=values.get('message','An approval has been updated. Open Comten to review the details.')

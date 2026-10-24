@@ -49,7 +49,12 @@ def recipient_allowed(channel, recipient):
     enabled=getattr(settings,channel+'_dispatch_enabled')
     allowed=settings.approved_sms_recipients if channel=='msg91' else settings.approved_email_recipients
     values={v.strip().lower() for v in allowed.split(',') if v.strip()}
-    if not enabled or recipient.lower() not in values:
+    enrolled = False
+    if channel in ('resend','zeptomail') and settings.email_registered_recipients_enabled and not recipient.lower().endswith(('.invalid', '@example.com')):
+        from .store import rows
+        matches = rows('employees',[('email',recipient.strip().lower())],2)
+        enrolled = len(matches)==1 and matches[0].get('active') and not matches[0].get('deleted')
+    if not enabled or (recipient.lower() not in values and not enrolled):
         raise HTTPException(503,'Dispatch requires an explicitly approved test recipient')
 
 

@@ -63,6 +63,15 @@ class AuthRepository {
 
   // --- SIGNUP FLOW ---
 
+  Future<ApiResult> sendActivationOtp(String employeeCode) {
+    return _post('/auth/signup/send-otp', {'employeeCode': employeeCode},
+      timeout: const Duration(seconds: ApiConstants.otpSendTimeoutSeconds));
+  }
+
+  Future<ApiResult> verifyActivationOtp(String employeeCode, String otp) {
+    return _post('/auth/signup/verify-otp', {'employeeCode': employeeCode, 'otp': otp});
+  }
+
   Future<ApiResult> verifyTempPassword({
     required String employeeCode,
     required String tempPassword,

@@ -1,10 +1,4 @@
-/// State carried across the multi-step signup flow (verify temp password ->
-/// phone OTP -> set password).
-///
-/// [signupToken] is the single-use proof, issued by
-/// `/auth/signup/verify-temp-password`, that this user supplied the correct
-/// temporary password. `/auth/signup/set-password` rejects the request without
-/// it, so it has to survive every step in between.
+/// Single-use email OTP proof carried from verification to password setup.
 class SignupSession {
   final String employeeCode;
   final String signupToken;

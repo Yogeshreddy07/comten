@@ -9,6 +9,7 @@ from firebase_admin import auth
 from app.main import app
 from app.security import current_user
 from app.store import db
+from conftest import activate_employee
 
 
 @pytest.fixture
@@ -53,9 +54,9 @@ def test_auto_codes_follow_highest_existing_code_and_sort_numerically(client):
     assert int(first['employeeCode'][3:]) == int(legacy_code[3:]) + 1
     assert db.collection('employees').document(str(legacy['id'])).get().to_dict()['employeeCode'] == legacy_code
     assert int(second['employeeCode'][3:]) == int(first['employeeCode'][3:]) + 1
-    assert client.post('/api/auth/login', json={
-        'employeeCode': first['employeeCode'], 'password': first['temporaryPassword']
-    }).status_code == 200
+    assert 'temporaryPassword' not in first
+    password = activate_employee(client, first['employeeCode'])
+    assert client.post('/api/auth/login', json={'employeeCode': first['employeeCode'], 'password': password}).status_code == 200
 
 
 @pytest.mark.parametrize('field,value,duplicate', [

@@ -21,22 +21,25 @@ def digest(value):
 
 
 def resolve(code):
-    found=rows('employees',[('employeeCode',str(code).upper())],2)
-    return found[0] if len(found)==1 and found[0].get('active') else None
+    found=rows('employees',[('employeeCode',str(code).strip().upper())],2)
+    return found[0] if len(found)==1 and found[0].get('active') and not found[0].get('deleted') else None
 
 
 @router.post('/auth/forgot-password/send-otp')
 async def send_otp(body: dict):
     person=resolve(body.get('employeeCode',''))
-    if not person or person.get('email','').lower()!=str(body.get('email','')).lower(): return {'success':True,'data':None,'message':GENERIC}
+    if not person or person.get('activationStatus') == 'PENDING' or person.get('email','').strip().lower()!=str(body.get('email','')).strip().lower(): return {'success':True,'data':None,'message':GENERIC}
     uid=str(person['id']);ref=db.collection('recovery').document(uid);otp='123456' if settings.environment=='local' else str(secrets.randbelow(900000)+100000);now=time.time()
     challenge=secrets.token_hex(16)
     @firestore.transactional
     def reserve(tx):
         previous=ref.get(transaction=tx).to_dict() or {}
         count=previous.get('sendCount',0) if previous.get('sendWindow',0)>now-3600 else 0
-        if previous.get('lastSent',0)>now-60 or count>=5: return False
-        tx.set(ref,{'otpHash':digest(uid+':'+otp),'expires':now+600,'attempts':0,'lastSent':now,'resetHash':None,'deliveryId':challenge,'deliveryState':'SENDING','sendCount':count+1,'sendWindow':previous.get('sendWindow',now) if count else now})
+        if previous.get('lastSent',0)>now-60:
+            if previous.get('deliveryState') == 'ACCEPTED' and previous.get('recipientHash') == digest(person['email'].strip().lower()): return False
+            raise HTTPException(429,'Wait one minute before requesting another OTP')
+        if count>=5: raise HTTPException(429,'Too many OTP requests. Please try again later')
+        tx.set(ref,{'otpHash':digest(uid+':'+otp),'recipientHash':digest(person['email'].strip().lower()),'expires':now+600,'attempts':0,'lastSent':now,'resetHash':None,'deliveryId':challenge,'deliveryState':'SENDING','sendCount':count+1,'sendWindow':previous.get('sendWindow',now) if count else now})
         return True
     if not transact(reserve): return {'success':True,'data':None,'message':GENERIC}
     try:
@@ -46,8 +49,9 @@ async def send_otp(body: dict):
             await email(person['email'],person['name'],subject,html,text=text,delivery_key=challenge)
     except HTTPException:
         ref.update({'deliveryState':'FAILED','otpHash':'unavailable'})
-        # Unknown and undeliverable accounts have the same public response.
-        return {'success':True,'data':None,'message':GENERIC}
+        import logging
+        logging.getLogger('crompton').warning('Password recovery email dispatch failed')
+        raise HTTPException(503,'Unable to send the verification email. Contact your administrator or retry after one minute.') from None
     ref.update({'deliveryState':'ACCEPTED'})
     return {'success':True,'data':None,'message':GENERIC}
 
@@ -55,12 +59,12 @@ async def send_otp(body: dict):
 @router.post('/auth/forgot-password/verify-otp')
 def verify_otp(body: dict):
     person=resolve(body.get('employeeCode',''))
-    if not person or person.get('email','').lower()!=str(body.get('email','')).lower(): raise HTTPException(401,'Invalid or expired verification code')
+    if not person or person.get('activationStatus') == 'PENDING' or person.get('email','').strip().lower()!=str(body.get('email','')).strip().lower(): raise HTTPException(401,'Invalid or expired verification code')
     uid=str(person['id']);ref=db.collection('recovery').document(uid);proof=secrets.token_urlsafe(32)
     @firestore.transactional
     def verify(tx):
         state=ref.get(transaction=tx).to_dict()
-        if not state or state.get('deliveryState')!='ACCEPTED' or state.get('expires',0)<time.time() or state.get('attempts',0)>=5 or state.get('resetHash'): return False
+        if not state or state.get('recipientHash') != digest(person['email'].strip().lower()) or state.get('deliveryState')!='ACCEPTED' or state.get('expires',0)<time.time() or state.get('attempts',0)>=5 or state.get('resetHash'): return False
         valid=hmac.compare_digest(state['otpHash'],digest(uid+':'+str(body.get('otp',''))))
         tx.update(ref,{'attempts':state['attempts']+1,**({'resetHash':digest(proof),'otpHash':'consumed'} if valid else {})})
         return valid
@@ -76,7 +80,7 @@ def reset(body: dict):
     @firestore.transactional
     def claim(tx):
         state=ref.get(transaction=tx).to_dict()
-        if not state or state.get('expires',0)<time.time() or state.get('resetBusyUntil',0)>time.time() or not state.get('resetHash') or not hmac.compare_digest(state['resetHash'],digest(str(body.get('resetToken','')))): return False
+        if not state or state.get('recipientHash') != digest(person['email'].strip().lower()) or state.get('expires',0)<time.time() or state.get('resetBusyUntil',0)>time.time() or not state.get('resetHash') or not hmac.compare_digest(state['resetHash'],digest(str(body.get('resetToken','')))): return False
         tx.update(ref,{'resetBusyUntil':time.time()+60})
         return True
     if not transact(claim): raise HTTPException(401,'Invalid or expired reset session')

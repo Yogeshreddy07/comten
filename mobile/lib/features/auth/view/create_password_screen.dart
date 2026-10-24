@@ -10,7 +10,7 @@ import '../widgets/auth_button.dart';
 import '../widgets/auth_header.dart';
 import '../widgets/auth_scaffold.dart';
 import '../widgets/auth_text_field.dart';
-import 'phonenumber_verification_screen.dart';
+import 'login_screen.dart';
 
 class CreatePasswordScreen extends StatefulWidget {
   final String employeeCode;
@@ -69,15 +69,12 @@ class _CreatePasswordScreenState
       );
 
       if (!context.canPushRoute) return;
-      Navigator.push(
+      Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(
-          builder: (_) =>
-              PhoneNumberScreen(
-                employeeCode:
-                widget.employeeCode,
-              ),
+          builder: (_) => const LoginScreen(),
         ),
+        (_) => false,
       );
 
     } else {

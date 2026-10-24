@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     approved_sms_recipients: str = ''
     zeptomail_dispatch_enabled: bool = False
     approved_email_recipients: str = ''
+    email_registered_recipients_enabled: bool = False
     fcm_dispatch_enabled: bool = False
     approved_fcm_user_ids: str = ''
     zeptomail_api_origin: str = 'https://cpaas.zoho.in'

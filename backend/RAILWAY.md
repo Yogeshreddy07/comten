@@ -1,5 +1,11 @@
 # Deploy the development backend to Railway
 
+Current email activation uses Resend and sends OTPs directly from the API.
+Configure the hosted Resend key and sender separately from the local `.env`;
+see [email OTP setup](../docs/email-otp.md). Non-OTP transactional notifications
+now have an API background worker. The historical SMS setup below remains
+available for existing integrations but is not part of new email activation.
+
 Repository: https://github.com/Yogeshreddy07/comten, branch `main`.
 Current API: https://comten-production.up.railway.app, deployed 23 October 2026.
 The Railway project is `4a9cfa7b-5a6a-41f5-b5ca-526d4f667cb9`; service is

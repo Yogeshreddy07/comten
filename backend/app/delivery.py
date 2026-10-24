@@ -75,3 +75,15 @@ async def dispatch_emails():
             if error.status_code==503: continue
             ref.update({'state':'REVIEW_REQUIRED'});continue
         ref.update({'state':'ACCEPTED'})
+
+
+async def email_worker():
+    """Drain non-OTP notifications in the API service; provider claims deduplicate replicas."""
+    import asyncio
+    import logging
+    while True:
+        try:
+            await asyncio.to_thread(lambda: asyncio.run(dispatch_emails()))
+        except Exception:
+            logging.getLogger('crompton').warning('Transactional email worker will retry')
+        await asyncio.sleep(30)

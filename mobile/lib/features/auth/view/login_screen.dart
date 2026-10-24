@@ -10,7 +10,7 @@ import '../widgets/auth_header.dart';
 import '../widgets/auth_scaffold.dart';
 import '../widgets/auth_text_field.dart';
 import 'forgot_password_screen.dart';
-import 'phonenumber_verification_screen.dart';
+import 'activate_account_screen.dart';
 import 'create_pin_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -63,12 +63,12 @@ class _LoginScreenState extends State<LoginScreen> {
         final bool phoneVerified = data['phoneVerified'] ?? false;
         final String empCode = data['employeeCode'] ?? employeeCode;
 
-        if (!phoneVerified) {
+        if (!phoneVerified && data['emailVerified'] != true) {
           if (!context.canPushRoute) return;
           Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => PhoneNumberScreen(employeeCode: empCode),
+                builder: (_) => const ActivateAccountScreen(),
             ),
           );
           return;

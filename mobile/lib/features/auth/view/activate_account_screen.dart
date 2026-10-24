@@ -1,6 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-
 import '../../../core/utils/navigation_guard.dart';
 import '../../../core/utils/snackbar_util.dart';
 import '../../../core/utils/validators.dart';
@@ -13,163 +14,75 @@ import 'create_password_screen.dart';
 
 class ActivateAccountScreen extends StatefulWidget {
   const ActivateAccountScreen({super.key});
-
   @override
-  State<ActivateAccountScreen> createState() =>
-      _ActivateAccountScreenState();
+  State<ActivateAccountScreen> createState() => _ActivateAccountScreenState();
 }
 
-class _ActivateAccountScreenState
-    extends State<ActivateAccountScreen> {
+class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
+  final _code = TextEditingController();
+  final _otp = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-
-  final _employeeCodeController =
-  TextEditingController();
-
-  final _temporaryPasswordController =
-  TextEditingController();
+  bool _sent = false;
+  int _remaining = 0;
+  Timer? _timer;
 
   @override
-  void dispose() {
-    _employeeCodeController.dispose();
-    _temporaryPasswordController.dispose();
-    super.dispose();
+  void dispose() { _timer?.cancel(); _code.dispose(); _otp.dispose(); super.dispose(); }
+
+  Future<void> _send() async {
+    if (Validators.employeeCode(_code.text) != null) {
+      _formKey.currentState?.validate(); return;
+    }
+    final vm = context.read<AuthViewModel>();
+    if (vm.isLoading) return;
+    final result = await vm.sendActivationOtp(_code.text.trim().toUpperCase());
+    if (!mounted) return;
+    if (!result.success) { SnackbarUtil.showError(context, result.message); return; }
+    setState(() { _sent = true; _remaining = 60; _otp.clear(); });
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) { timer.cancel(); return; }
+      setState(() => _remaining--);
+      if (_remaining <= 0) timer.cancel();
+    });
+    SnackbarUtil.showSuccess(context, result.message);
   }
 
-  Future<void> _activateAccount() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
-
-    final viewModel =
-    context.read<AuthViewModel>();
-
-    if (viewModel.isLoading) return;
-
-    final result =
-    await viewModel.verifyTempPassword(
-      employeeCode:
-      _employeeCodeController.text.trim(),
-      tempPassword:
-      _temporaryPasswordController.text.trim(),
-    );
-
+  Future<void> _verify() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+    final vm = context.read<AuthViewModel>();
+    if (vm.isLoading) return;
+    final result = await vm.verifyActivationOtp(_code.text.trim().toUpperCase(), _otp.text.trim());
     if (!mounted) return;
-
-    if (result.success) {
-      SnackbarUtil.showSuccess(
-        context,
-        result.message,
-      );
-
-      if (!context.canPushRoute) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) =>
-              CreatePasswordScreen(
-                employeeCode:
-                _employeeCodeController.text
-                    .trim(),
-              ),
-        ),
-      );
-    } else {
-      SnackbarUtil.showError(
-        context,
-        result.message,
-      );
-    }
+    if (!result.success) { SnackbarUtil.showError(context, result.message); return; }
+    _timer?.cancel();
+    if (!context.canPushRoute) return;
+    Navigator.push(context, MaterialPageRoute(builder: (_) => CreatePasswordScreen(employeeCode: _code.text.trim().toUpperCase())));
   }
 
   @override
   Widget build(BuildContext context) {
-    final viewModel =
-    context.watch<AuthViewModel>();
-
-    return AuthScaffold(
-      title: "Activate Account",
-      child: Form(
-        key: _formKey,
-        child: Column(
-          children: [
-
-            const SizedBox(height: 20),
-
-            const AuthHeader(
-              icon: Icons.verified_user_outlined,
-              title: "Activate Account",
-              subtitle:
-              "Enter the Employee Code and Temporary Password sent to your company email.",
-            ),
-
-            const SizedBox(height: 30),
-
-            AuthTextField(
-              controller:
-              _employeeCodeController,
-              label: "Employee Code",
-              icon: Icons.badge_outlined,
-              validator:
-              Validators.employeeCode,
-            ),
-
-            const SizedBox(height: 20),
-
-            AuthTextField(
-              controller:
-              _temporaryPasswordController,
-              label: "Temporary Password",
-              icon: Icons.lock_outline,
-              isPassword: true,
-              validator:
-              Validators.temporaryPassword,
-            ),
-
-            const SizedBox(height: 25),
-
-            Builder(
-              builder: (context) {
-                final colorScheme = Theme.of(context).colorScheme;
-                return Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.info_outline,
-                        color: colorScheme.onPrimaryContainer,
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          "Use the temporary password received in your registered company email. After successful verification, you'll be asked to create your own password.",
-                          style: TextStyle(color: colorScheme.onPrimaryContainer),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-
-            const SizedBox(height: 30),
-
-            AuthButton(
-              text: "Continue",
-              isLoading:
-              viewModel.isLoading,
-              onPressed:
-              viewModel.isLoading ? null : _activateAccount,
-            ),
-          ],
-        ),
-      ),
-    );
+    final vm = context.watch<AuthViewModel>();
+    return AuthScaffold(title: 'Activate Account', child: Form(key: _formKey, child: Column(children: [
+      const SizedBox(height: 20),
+      AuthHeader(icon: Icons.mark_email_read_outlined, title: 'Activate Account', subtitle: _sent
+        ? 'Enter the 6-digit OTP sent to your registered email. Then set your password.'
+        : 'Enter your employee code to receive an OTP at your registered email address.'),
+      const SizedBox(height: 24),
+      AuthTextField(controller: _code, label: 'Employee Code', icon: Icons.badge_outlined,
+        readOnly: _sent || vm.isLoading, validator: Validators.employeeCode),
+      if (_sent) ...[
+        const SizedBox(height: 20),
+        AuthTextField(controller: _otp, label: 'Email OTP', icon: Icons.pin_outlined,
+          keyboardType: TextInputType.number, maxLength: 6,
+          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+          validator: (v) => v != null && v.length == 6 ? null : 'Enter the complete 6-digit OTP'),
+        TextButton(onPressed: vm.isLoading || _remaining > 0 ? null : _send,
+          child: Text(_remaining > 0 ? 'Resend OTP in $_remaining seconds' : 'Resend OTP')),
+      ],
+      const SizedBox(height: 24),
+      AuthButton(text: _sent ? 'Verify OTP' : 'Send OTP', isLoading: vm.isLoading,
+        onPressed: vm.isLoading ? null : (_sent ? _verify : _send)),
+    ])));
   }
 }

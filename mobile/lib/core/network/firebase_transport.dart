@@ -42,7 +42,7 @@ class FirebaseTransport {
     final user=auth.currentUser;
     if(user==null) throw StateError('Sign in required');
     final data=(await db.collection('employees').doc(user.uid).get(const GetOptions(source:Source.server)).timeout(const Duration(seconds:8))).data();
-    if(data==null || data['active']!=true) {
+    if(data==null || data['active']!=true || data['activationStatus']=='PENDING') {
       await AccountCache.instance.clear(); await auth.signOut();
       throw StateError('Account is inactive');
     }
@@ -71,19 +71,7 @@ class FirebaseTransport {
         final p=await profile();
         return response({...p,'userId':p['id'],'token':await result.user!.getIdToken()});
       }
-      if(endpoint=='/auth/signup/verify-temp-password') {
-        await AccountCache.instance.clear(accountUid:auth.currentUser?.uid); await auth.signOut();
-        final result=await auth.signInWithEmailAndPassword(email:email(body['employeeCode'] as String),password:body['tempPassword'] as String);
-        final p=await profile();
-        return response({...p,'signupToken':await result.user!.getIdToken()});
-      }
-      if(endpoint=='/auth/signup/set-password') {
-        final p=await profile();
-        if(p['employeeCode'].toString().toLowerCase()!=body['employeeCode'].toString().toLowerCase()) throw StateError('Invalid activation session');
-        if(body['newPassword']!=body['confirmPassword'] || Validators.password(body['newPassword'] as String?)!=null) throw StateError('Use matching passwords that satisfy the displayed password requirements');
-        await auth.currentUser!.updatePassword(body['newPassword'] as String);
-        return response(null,message:'Password updated');
-      }
+      if(endpoint.startsWith('/auth/signup/')) return null;
       if(endpoint=='/auth/logout') {
         await AccountCache.instance.clear(accountUid:auth.currentUser?.uid); _profile=null; await auth.signOut();return response(null);
       }

@@ -211,8 +211,7 @@ class AppStrings {
   static const employeeNextButton = 'Next';
   static const employeeCancelButton = 'Cancel';
   static const addEmployeeWelcomeNote =
-      'A temporary password will be shown after saving. Share it through '
-      'your approved private channel.';
+      'An activation OTP will be emailed to the registered address. The employee can verify it and set their own password.';
 
   static const deactivateEmployeeTitle = 'Deactivate Employee';
   static String deactivateEmployeeMessage(String name) =>

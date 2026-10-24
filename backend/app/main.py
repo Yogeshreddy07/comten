@@ -1,4 +1,6 @@
 import logging
+import asyncio
+from contextlib import asynccontextmanager, suppress
 import os
 import secrets
 import time
@@ -26,7 +28,19 @@ from .mobile_contracts import module_response,project_response
 from .roster import refresh_project_roster
 from .module_validation import validate_module, MODULE_FIELDS, WORK_STAGES, STATUSES
 
-app = FastAPI(title='Crompton PMS', version='1.0.0')
+@asynccontextmanager
+async def lifespan(_app):
+    from .delivery import email_worker
+    worker = asyncio.create_task(email_worker()) if settings.environment != 'local' else None
+    try:
+        yield
+    finally:
+        if worker:
+            worker.cancel()
+            with suppress(asyncio.CancelledError): await worker
+
+
+app = FastAPI(title='Crompton PMS', version='1.0.0', lifespan=lifespan)
 local_origins=['http://127.0.0.1:3008','http://127.0.0.1:3009'] if settings.environment in ('local','development') else []
 app.add_middleware(CORSMiddleware, allow_origins=[settings.web_origin, 'http://127.0.0.1:3000']+local_origins, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type','Idempotency-Key'])
 log = logging.getLogger('crompton')
@@ -97,7 +111,7 @@ async def login(body: dict):
     if result.status_code != 200: raise HTTPException(401,'Invalid credentials')
     data = result.json()
     user = get('employees',data['localId'])
-    if not user or not user.get('active'): raise HTTPException(401,'Invalid credentials')
+    if not user or not user.get('active') or user.get('activationStatus') == 'PENDING': raise HTTPException(401,'Invalid credentials')
     return ok({**user,'userId':user['id'],'token':data['idToken']})
 
 
@@ -112,18 +126,18 @@ def me(user=Depends(current_user)): return ok(user|{'userId':user['id']})
 
 
 @app.post('/api/employees')
-def provision(body: EmployeeCreate, user=Depends(current_user)):
+async def provision(body: EmployeeCreate, user=Depends(current_user)):
     manager(user)
     if body.role in ('CAPTAIN','PROJECT_CONTROLLER'): require(user,'CAPTAIN')
     uid = str(secrets.randbelow(900000)+100000)
-    password = body.password or 'Aa1!'+secrets.token_urlsafe(18)
-    record = body.model_dump(exclude={'password'}) | {'id':int(uid),'active':False,'provisioning':True,'deleted':False,'phoneVerified':False,'permissionVersion':1}
+    password = 'Aa1!'+secrets.token_urlsafe(32)
+    record = body.model_dump(exclude={'password'}) | {'id':int(uid),'active':False,'provisioning':True,'deleted':False,'phoneVerified':False,'emailVerified':False,'activationStatus':'PENDING','permissionVersion':1}
     record = save_identity(uid, record, creating=True)
     code = record['employeeCode']
     alias = code.lower()+'@accounts.crompton.invalid'
     created_auth = False
     try:
-        auth.create_user(uid=uid,email=alias,password=password,display_name=body.name)
+        auth.create_user(uid=uid,email=alias,password=password,display_name=body.name,disabled=True)
         created_auth = True
         auth.set_custom_user_claims(uid,{'role':body.role})
         db.collection('employees').document(uid).update({'active':True,'provisioning':firestore.DELETE_FIELD})
@@ -135,9 +149,12 @@ def provision(body: EmployeeCreate, user=Depends(current_user)):
         raise
     record['active'] = True
     record.pop('provisioning', None)
-    from .delivery import event
-    event(int(uid),'invitation','employee-created-'+uid,code=code)
-    return ok(record | {'temporaryPassword':password},'Employee created; deliver credentials through an approved channel')
+    from .email_activation import send_activation
+    try:
+        sent = await send_activation(record)
+    except HTTPException:
+        sent = False
+    return ok(record | {'activationEmailSent':sent}, 'Employee created. Email OTP sent for activation.' if sent else 'Employee created, but the activation email could not be sent. Configure email delivery, then request an OTP from Activate Account.')
 
 
 @app.post('/api/employees/validate-identity')
@@ -277,6 +294,8 @@ from .storage import router as storage_router
 app.include_router(storage_router)
 from .recovery import router as recovery_router
 app.include_router(recovery_router)
+from .email_activation import router as email_activation_router
+app.include_router(email_activation_router)
 
 
 @app.api_route('/api/{collection}/{key}/{action}',methods=['PUT','POST'])

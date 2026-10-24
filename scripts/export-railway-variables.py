@@ -25,6 +25,7 @@ values = {
     'MSG91_DISPATCH_ENABLED': 'false',
     'ZEPTOMAIL_DISPATCH_ENABLED': 'false',
     'RESEND_DISPATCH_ENABLED': 'false',
+    'EMAIL_REGISTERED_RECIPIENTS_ENABLED': 'false',
     'EMAIL_PROVIDER': settings.email_provider,
     'FCM_DISPATCH_ENABLED': 'false',
     'APPROVED_SMS_RECIPIENTS': '',
