@@ -67,6 +67,10 @@ class EmployeeViewModel extends ChangeNotifier {
   bool get isSaving => _isSaving;
   bool get isDeactivating => _isDeactivating;
 
+  Future<ApiResult> validateIdentity({required String email, required String phone, int? excludeEmployeeId}) {
+    return _repository.validateIdentity(email: email, phone: phone, excludeEmployeeId: excludeEmployeeId);
+  }
+
   Future<ApiResult> createEmployee(CreateEmployeeRequest request) async {
     _isSaving = true;
     notifyListeners();

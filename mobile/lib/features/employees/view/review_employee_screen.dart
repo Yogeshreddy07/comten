@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../model/employee.dart';
+import '../model/employee_identity_validation.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/utils/navigation_guard.dart';
@@ -24,7 +25,7 @@ import '../viewmodel/employee_view_model.dart';
 /// [onConfirmSave] and persists the record. On success this screen pops
 /// with the backend's message string instead of showing it itself - the
 /// list screen displays it once the whole add/edit flow has unwound.
-class ReviewEmployeeScreen extends StatelessWidget {
+class ReviewEmployeeScreen extends StatefulWidget {
   final bool isEditMode;
   final String name;
   final UserRole role;
@@ -32,6 +33,7 @@ class ReviewEmployeeScreen extends StatelessWidget {
   final String phone;
   final String email;
   final Future<ApiResult> Function() onConfirmSave;
+  final Future<ApiResult> Function() onValidateIdentity;
 
   const ReviewEmployeeScreen({
     super.key,
@@ -42,7 +44,45 @@ class ReviewEmployeeScreen extends StatelessWidget {
     required this.phone,
     required this.email,
     required this.onConfirmSave,
+    required this.onValidateIdentity,
   });
+
+  @override
+  State<ReviewEmployeeScreen> createState() => _ReviewEmployeeScreenState();
+}
+
+class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
+  bool _checkingIdentity = true;
+  bool _confirming = false;
+  Map<String, String> _identityErrors = {};
+  String? _identityCheckError;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _validateIdentity(); });
+  }
+
+  Future<bool> _validateIdentity() async {
+    setState(() { _checkingIdentity = true; _identityCheckError = null; });
+    ApiResult result;
+    try {
+      result = await widget.onValidateIdentity();
+    } catch (_) {
+      result = ApiResult(success: false, message: 'Unable to validate employee details. Please retry.');
+    }
+    if (!mounted) return false;
+    final validation = result.data;
+    setState(() {
+      _checkingIdentity = false;
+      if (result.success && validation is EmployeeIdentityValidation) {
+        _identityErrors = validation.errors;
+      } else {
+        _identityCheckError = result.success ? 'Unable to validate employee details. Please retry.' : result.message;
+      }
+    });
+    return _identityCheckError == null && _identityErrors.isEmpty;
+  }
 
   Future<bool> _showConfirmDialog(BuildContext context) async {
     if (!context.canPushRoute) return false;
@@ -69,14 +109,26 @@ class ReviewEmployeeScreen extends StatelessWidget {
   }
 
   Future<void> _handleConfirm(BuildContext context) async {
+    if (_confirming || _checkingIdentity || _identityErrors.isNotEmpty || _identityCheckError != null) return;
+    setState(() => _confirming = true);
+    try {
+      await _confirmAndSave(context);
+    } finally {
+      if (mounted) setState(() => _confirming = false);
+    }
+  }
+
+  Future<void> _confirmAndSave(BuildContext context) async {
     // Resolve the messenger for the failure path now: everything after
     // dialog-confirming Save runs after an await, when this screen's
     // context may be stale.
     final messenger = ScaffoldMessenger.of(context);
+    if (!await _validateIdentity() || !context.mounted) return;
     final confirmed = await _showConfirmDialog(context);
     if (!confirmed || !context.mounted) return;
+    if (!await _validateIdentity() || !context.mounted) return;
 
-    final result = await onConfirmSave();
+    final result = await widget.onConfirmSave();
     if (!context.mounted) return;
 
     if (result.success) {
@@ -96,6 +148,8 @@ class ReviewEmployeeScreen extends StatelessWidget {
       // it only once every pop has settled.
       Navigator.pop(context, result.message);
     } else {
+      await _validateIdentity();
+      if (!context.mounted) return;
       SnackbarUtil.showErrorOn(messenger, result.message);
     }
   }
@@ -103,12 +157,13 @@ class ReviewEmployeeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<EmployeeViewModel>();
-    final roleLabel = role.displayLabel;
+    final roleLabel = widget.role.displayLabel;
+    final busy = viewModel.isSaving || _confirming || _checkingIdentity;
 
     return Scaffold(
       appBar: AppBar(
         title: Text(
-          isEditMode
+          widget.isEditMode
               ? AppStrings.reviewEditEmployeeTitle(roleLabel)
               : AppStrings.reviewAddEmployeeTitle(roleLabel),
         ),
@@ -123,14 +178,21 @@ class ReviewEmployeeScreen extends StatelessWidget {
               ReviewSummarySection(
                 title: AppStrings.reviewEmployeeSectionTitle,
                 rows: [
-                  ReviewDetailRow(AppStrings.employeeFieldName, name),
+                  ReviewDetailRow(AppStrings.employeeFieldName, widget.name),
                   ReviewDetailRow(AppStrings.employeeFieldRole, roleLabel),
-                  ReviewDetailRow(AppStrings.employeeFieldCode, employeeCode),
-                  ReviewDetailRow(AppStrings.employeeFieldPhone, phone),
-                  ReviewDetailRow(AppStrings.employeeFieldEmail, email),
+                  ReviewDetailRow(AppStrings.employeeFieldCode, widget.employeeCode),
+                  ReviewDetailRow(AppStrings.employeeFieldPhone, widget.phone),
+                  ReviewDetailRow(AppStrings.employeeFieldEmail, widget.email),
                 ],
               ),
               const SizedBox(height: AppDimensions.cardSpacing),
+              for (final error in _identityErrors.values)
+                Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(error,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error))),
+              if (_identityCheckError != null) ...[
+                Text(_identityCheckError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                TextButton(onPressed: busy ? null : _validateIdentity, child: const Text('Retry validation')),
+              ],
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -158,7 +220,7 @@ class ReviewEmployeeScreen extends StatelessWidget {
                     child: AppButton(
                       text: AppStrings.reviewEmployeeEditButton,
                       outlined: true,
-                      onPressed: viewModel.isSaving
+                      onPressed: viewModel.isSaving || _confirming
                           ? null
                           : () => Navigator.pop(context),
                     ),
@@ -167,8 +229,8 @@ class ReviewEmployeeScreen extends StatelessWidget {
                   Expanded(
                     child: AppButton(
                       text: AppStrings.reviewEmployeeConfirmButton,
-                      isLoading: viewModel.isSaving,
-                      onPressed: viewModel.isSaving
+                      isLoading: viewModel.isSaving || _checkingIdentity,
+                      onPressed: busy || _identityErrors.isNotEmpty || _identityCheckError != null
                           ? null
                           : () => _handleConfirm(context),
                     ),

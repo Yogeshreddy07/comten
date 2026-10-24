@@ -96,6 +96,8 @@ class FirebaseTransport {
         await u.updatePassword(body['newPassword'] as String);return response(null);
       }
       if(collection=='auth') return null;
+      // Contact validation is authoritative, read-only backend work.
+      if(endpoint=='/employees/validate-identity') return null;
       Map<String,dynamic> p;
       try { p=await profile(); }
       on Exception catch(e) {

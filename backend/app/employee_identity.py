@@ -8,6 +8,31 @@ from .models import normalize_phone
 from .store import db, transact
 
 
+def identity_conflicts(records, candidate, exclude_uid=None):
+    """Return field errors naming the owners, without exposing other contacts."""
+    owners = {'employeeCode': [], 'email': [], 'phone': []}
+    phone = normalize_phone(candidate.get('phone'))
+    email = str(candidate.get('email', '')).strip().lower()
+    code = str(candidate.get('employeeCode') or '').strip().upper()
+    for other in records:
+        if exclude_uid is not None and str(other.get('id')) == str(exclude_uid):
+            continue
+        label = f"{other.get('name', 'Employee')} ({other.get('employeeCode', other.get('id'))})"
+        if code and str(other.get('employeeCode', '')).strip().upper() == code:
+            owners['employeeCode'].append(label)
+        if email and str(other.get('email', '')).strip().lower() == email:
+            owners['email'].append(label)
+        try:
+            other_phone = normalize_phone(other.get('phone'))
+        except ValueError:
+            other_phone = ''
+        if phone and other_phone == phone:
+            owners['phone'].append(label)
+    labels = {'employeeCode': 'Employee code', 'email': 'Email address', 'phone': 'Phone number'}
+    return {field: f"{labels[field]} is already in use by {', '.join(names)}."
+            for field, names in owners.items() if names}
+
+
 def save_identity(uid, record, *, creating):
     # Every create/edit takes this shared lock. Checking and writing in one
     # transaction prevents two different accounts claiming the same contact.
@@ -33,20 +58,9 @@ def save_identity(uid, record, *, creating):
         if creating and not candidate.get('employeeCode'):
             sequence += 1
             candidate['employeeCode'] = f'EMP{sequence:03d}'
-        for snap in snapshots:
-            if snap.id == str(uid):
-                continue
-            other = snap.to_dict()
-            if str(other.get('employeeCode', '')).strip().upper() == str(candidate['employeeCode']).strip().upper():
-                raise HTTPException(409, 'Employee code is already in use')
-            if str(other.get('email', '')).strip().lower() == str(candidate['email']).strip().lower():
-                raise HTTPException(409, 'Email address is already in use')
-            try:
-                phone = normalize_phone(other.get('phone'))
-            except ValueError:
-                phone = ''
-            if candidate.get('phone') and phone == normalize_phone(candidate['phone']):
-                raise HTTPException(409, 'Phone number is already in use')
+        conflicts = identity_conflicts([s.to_dict() | {'id': s.id} for s in snapshots], candidate, uid)
+        if conflicts:
+            raise HTTPException(409, ' '.join(conflicts.values()))
         # Keep the counter even after a failed provisioning attempt so no
         # issued identity is reused. Existing employee codes never change.
         tx.set(lock, {'sequence': sequence, 'version': int(state.get('version', 0)) + 1})

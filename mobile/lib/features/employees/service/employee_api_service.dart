@@ -11,6 +11,10 @@ import '../../../core/network/api_service.dart';
 class EmployeeApiService {
   final ApiService _apiService = ApiService();
 
+  Future<http.Response> validateIdentity(Map<String, dynamic> body, {String? token}) {
+    return _apiService.post('/employees/validate-identity', body, token: token);
+  }
+
   Future<http.Response> getEmployees({String? token, String? role}) {
     if (role == null) {
       return _apiService.get(ApiConstants.employees, token: token);

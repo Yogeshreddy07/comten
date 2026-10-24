@@ -8,6 +8,7 @@ import '../../../shared/enums/user_role.dart';
 import '../../auth/model/api_result.dart';
 import '../model/create_employee_request.dart';
 import '../model/employee.dart';
+import '../model/employee_identity_validation.dart';
 import '../model/update_employee_request.dart';
 import '../service/employee_api_service.dart';
 
@@ -73,6 +74,17 @@ class EmployeeRepository {
       mapData: (data) => (data as List)
           .map((json) => Employee.fromJson(json as Map<String, dynamic>))
           .toList(),
+    );
+  }
+
+  Future<ApiResult> validateIdentity({required String email, required String phone, int? excludeEmployeeId}) async {
+    final token = await _currentToken();
+    final body = <String, dynamic>{'email': email, 'phone': phone};
+    if (excludeEmployeeId != null) body['excludeEmployeeId'] = excludeEmployeeId;
+    return _request(
+      () => _apiService.validateIdentity(body, token: token),
+      isSuccess: (code) => code == 200,
+      mapData: (data) => EmployeeIdentityValidation.fromJson(data as Map<String, dynamic>),
     );
   }
 

@@ -51,3 +51,20 @@ class EmployeeCreate(BaseModel):
     def password_policy(cls,value):
         if value is not None and not valid_password(value):raise ValueError('Password must match the existing complexity policy')
         return value
+
+
+class EmployeeIdentityCheck(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    email: str = Field(max_length=254, pattern=r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+    phone: str = Field(default='', max_length=16)
+    excludeEmployeeId: int | None = Field(default=None, gt=0)
+
+    @field_validator('email', mode='before')
+    @classmethod
+    def normalized_email(cls, value):
+        return value.strip().lower() if isinstance(value, str) else value
+
+    @field_validator('phone', mode='before')
+    @classmethod
+    def normalized_phone(cls, value):
+        return normalize_phone(value)

@@ -20,6 +20,7 @@ class AppTextField extends StatelessWidget {
   /// string in local state can still display it. Mirrors the existing
   /// `EstimatedDurationInput.errorText` pattern used for the same reason.
   final String? errorText;
+  final int? errorMaxLines;
 
   const AppTextField({
     super.key,
@@ -35,6 +36,7 @@ class AppTextField extends StatelessWidget {
     this.hintText,
     this.inputFormatters,
     this.errorText,
+    this.errorMaxLines,
   });
 
   @override
@@ -52,6 +54,7 @@ class AppTextField extends StatelessWidget {
         labelText: label,
         hintText: hintText,
         errorText: errorText,
+        errorMaxLines: errorMaxLines,
         alignLabelWithHint: maxLines > 1,
         prefixIcon: icon != null ? Icon(icon) : null,
         border: OutlineInputBorder(

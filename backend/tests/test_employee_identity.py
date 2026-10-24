@@ -122,3 +122,47 @@ def test_failed_auth_creation_releases_contacts(client, monkeypatch):
     assert client.post('/api/employees', json=body).status_code == 409
     monkeypatch.setattr(auth, 'create_user', original)
     assert client.post('/api/employees', json=body).status_code == 200
+
+
+def test_preflight_reports_both_owners_without_writing(client):
+    first = create(client, phone='9876543220')
+    second = create(client)
+    db.collection('employees').document(str(first['id'])).update({'deleted': True, 'active': False})
+    before = {s.id for s in db.collection('employees').stream()}
+    counter = db.collection('counters').document('employee-identities').get().to_dict()
+    response = client.post('/api/employees/validate-identity', json={
+        'phone': '+91 98765 43220', 'email': ' ' + second['email'].upper() + ' '
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()['data']
+    assert data['valid'] is False
+    assert set(data['errors']) == {'phone', 'email'}
+    assert first['name'] in data['errors']['phone'] and first['employeeCode'] in data['errors']['phone']
+    assert second['employeeCode'] in data['errors']['email']
+    assert first['email'] not in response.text
+    assert {s.id for s in db.collection('employees').stream()} == before
+    assert db.collection('counters').document('employee-identities').get().to_dict() == counter
+
+
+def test_edit_preflight_allows_own_contacts_but_not_another_employee(client):
+    employee = create(client, phone='9876543221')
+    request = {'phone': '9876543221', 'email': employee['email'], 'excludeEmployeeId': employee['id']}
+    data = client.post('/api/employees/validate-identity', json=request).json()['data']
+    assert data == {'valid': True, 'errors': {}}
+    request.pop('excludeEmployeeId')
+    assert client.post('/api/employees/validate-identity', json=request).json()['data']['valid'] is False
+    response = client.post('/api/employees', json=payload(phone='9876543221'))
+    assert response.status_code == 409
+    assert employee['employeeCode'] in response.json()['message']
+
+
+def test_preflight_requires_manager_and_rejects_invalid_fields(client):
+    previous = app.dependency_overrides[current_user]
+    app.dependency_overrides[current_user] = lambda: {'id': 1, 'role': 'EMPLOYEE'}
+    assert client.post('/api/employees/validate-identity', json={'email': 'test@example.invalid'}).status_code == 403
+    app.dependency_overrides.pop(current_user)
+    assert client.post('/api/employees/validate-identity', json={'email': 'test@example.invalid'}).status_code == 401
+    app.dependency_overrides[current_user] = previous
+    response = client.post('/api/employees/validate-identity', json={'email': 'test@example.invalid', 'password': 'NeverEchoThisPassword'})
+    assert response.status_code == 422 and 'NeverEchoThisPassword' not in response.text
+    assert client.post('/api/employees/validate-identity', json={'email': 'not-an-email'}).status_code == 422

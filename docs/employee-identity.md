@@ -28,6 +28,17 @@ releases the employee/contact reservation, while keeping the counter advanced;
 there can be sequence gaps after failures, and issued codes are never reused.
 Existing duplicate data is not automatically changed or merged.
 
+Before the form opens Review, `POST /api/employees/validate-identity` checks
+normalized email and phone on the server and displays field errors naming the
+existing employee and code. The manager-only endpoint is read-only and supports
+`excludeEmployeeId` for editing an employee's own contacts. Inactive and deleted
+employees still reserve their contacts. No contact lookup accepts passwords.
+
+Review also validates on entry, before opening the Save dialog, and immediately
+before saving. Confirm is disabled while checking, on duplicates, or after a
+validation failure; failures offer Retry. The transactional create/update checks
+remain authoritative if an identity is claimed between validation and saving.
+
 The Reason for Delay picker reads assigned module fields directly, without
 loading full employee profiles. This avoids permission failures caused by
 historical module members outside the lead's current peer roster. Employee

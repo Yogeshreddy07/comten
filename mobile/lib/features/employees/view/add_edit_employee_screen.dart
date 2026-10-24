@@ -16,6 +16,7 @@ import '../../auth/model/api_result.dart';
 import '../../auth/viewmodel/auth_viewmodel.dart';
 import '../model/create_employee_request.dart';
 import '../model/employee.dart';
+import '../model/employee_identity_validation.dart';
 import '../model/update_employee_request.dart';
 import '../viewmodel/employee_view_model.dart';
 import 'review_employee_screen.dart';
@@ -60,6 +61,49 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
   TextEditingController? _fixedRoleController;
 
   UserRole? _role;
+  bool _checkingIdentity = false;
+  Map<String, String> _identityErrors = {};
+  String? _identityCheckError;
+
+  Future<ApiResult> _requestIdentityValidation() {
+    return context.read<EmployeeViewModel>().validateIdentity(
+      email: _emailController.text.trim(), phone: _phoneController.text.trim(),
+      excludeEmployeeId: widget.employee?.id,
+    );
+  }
+
+  void _contactChanged(String field) {
+    setState(() {
+      _identityErrors.remove(field);
+      _identityCheckError = null;
+    });
+  }
+
+  Future<bool> _validateIdentity() async {
+    final email = _emailController.text.trim();
+    final phone = _phoneController.text.trim();
+    setState(() { _checkingIdentity = true; _identityErrors = {}; _identityCheckError = null; });
+    ApiResult result;
+    try {
+      result = await _requestIdentityValidation();
+    } catch (_) {
+      result = ApiResult(success: false, message: 'Unable to validate employee details. Please retry.');
+    }
+    if (!mounted) return false;
+    final changed = email != _emailController.text.trim() || phone != _phoneController.text.trim();
+    final validation = result.data;
+    setState(() {
+      _checkingIdentity = false;
+      if (changed) {
+        _identityCheckError = 'Details changed during validation. Please tap Next again.';
+      } else if (result.success && validation is EmployeeIdentityValidation) {
+        _identityErrors = validation.errors;
+      } else {
+        _identityCheckError = result.success ? 'Unable to validate employee details. Please retry.' : result.message;
+      }
+    });
+    return !changed && _identityCheckError == null && _identityErrors.isEmpty;
+  }
 
   @override
   void initState() {
@@ -139,6 +183,7 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
   }
 
   Future<void> _goToReview() async {
+    if (_checkingIdentity) return;
     final roleError = _role == null ? 'Role is required' : null;
     final isFormValid = _formKey.currentState?.validate() ?? false;
 
@@ -149,6 +194,7 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
       return;
     }
 
+    if (!await _validateIdentity() || !mounted) return;
     if (!context.canPushRoute) return;
 
     final message = await Navigator.push<String>(
@@ -162,6 +208,7 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
           phone: _phoneController.text.trim(),
           email: _emailController.text.trim(),
           onConfirmSave: _performSave,
+          onValidateIdentity: _requestIdentityValidation,
         ),
       ),
     );
@@ -244,6 +291,9 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
                   icon: Icons.phone_outlined,
                   keyboardType: TextInputType.phone,
                   validator: Validators.phone,
+                  errorText: _identityErrors['phone'],
+                  errorMaxLines: 6,
+                  onChanged: (_) => _contactChanged('phone'),
                   inputFormatters: [
                     FilteringTextInputFormatter.digitsOnly,
                     LengthLimitingTextInputFormatter(10),
@@ -256,7 +306,14 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
                   icon: Icons.mail_outline,
                   keyboardType: TextInputType.emailAddress,
                   validator: Validators.email,
+                  errorText: _identityErrors['email'],
+                  errorMaxLines: 6,
+                  onChanged: (_) => _contactChanged('email'),
                 ),
+                if (_identityCheckError != null) ...[
+                  const SizedBox(height: 10),
+                  Text(_identityCheckError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                ],
                 if (!widget.isEditMode) ...[
                   const SizedBox(height: 10),
                   Row(
@@ -293,8 +350,8 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
                     Expanded(
                       child: AppButton(
                         text: AppStrings.employeeNextButton,
-                        isLoading: viewModel.isSaving,
-                        onPressed: viewModel.isSaving ? null : _goToReview,
+                        isLoading: viewModel.isSaving || _checkingIdentity,
+                        onPressed: viewModel.isSaving || _checkingIdentity || _identityErrors.isNotEmpty ? null : _goToReview,
                       ),
                     ),
                   ],

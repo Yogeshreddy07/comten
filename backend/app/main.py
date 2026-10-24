@@ -17,8 +17,8 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from google.api_core.exceptions import Aborted,AlreadyExists,ServiceUnavailable,DeadlineExceeded
 
 from .config import settings
-from .models import EmployeeCreate
-from .employee_identity import save_identity
+from .models import EmployeeCreate, EmployeeIdentityCheck
+from .employee_identity import save_identity, identity_conflicts
 from .security import current_user, manager, require
 from .store import db, get, rows, all_rows
 from .messaging import notify
@@ -138,6 +138,17 @@ def provision(body: EmployeeCreate, user=Depends(current_user)):
     from .delivery import event
     event(int(uid),'invitation','employee-created-'+uid,code=code)
     return ok(record | {'temporaryPassword':password},'Employee created; deliver credentials through an approved channel')
+
+
+@app.post('/api/employees/validate-identity')
+def validate_employee_identity(body: EmployeeIdentityCheck, user=Depends(current_user)):
+    manager(user)
+    if body.excludeEmployeeId is not None:
+        target = get('employees', body.excludeEmployeeId)
+        if not target: raise HTTPException(404, 'Employee not found')
+        if target['role'] in ('CAPTAIN', 'PROJECT_CONTROLLER'): require(user, 'CAPTAIN')
+    conflicts = identity_conflicts(all_rows('employees'), body.model_dump(), body.excludeEmployeeId)
+    return ok({'valid': not conflicts, 'errors': conflicts})
 
 
 @app.put('/api/employees/{uid}')
