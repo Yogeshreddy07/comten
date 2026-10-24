@@ -74,9 +74,13 @@ class LocationStatusCard extends StatelessWidget {
       );
     }
 
-    final message = current?.failure != null
-        ? _failureMessage(current!.failure!)
+    final failure = current?.failure;
+    final message = failure != null
+        ? _failureMessage(failure)
         : AppStrings.attendanceLocationFailed;
+    // Retrying can't help when the fix lives in system settings - send the
+    // user there instead; the screen re-captures location on resume.
+    final opensSettings = LocationHelper.needsSettings(failure);
 
     return AppCard(
       child: Row(
@@ -85,8 +89,12 @@ class LocationStatusCard extends StatelessWidget {
           const SizedBox(width: 14),
           Expanded(child: Text(message)),
           TextButton(
-            onPressed: onRetry,
-            child: const Text(AppStrings.attendanceLocationRetry),
+            onPressed: opensSettings
+                ? () => LocationHelper.openSettingsFor(failure!)
+                : onRetry,
+            child: Text(opensSettings
+                ? AppStrings.attendanceLocationOpenSettings
+                : AppStrings.attendanceLocationRetry),
           ),
         ],
       ),

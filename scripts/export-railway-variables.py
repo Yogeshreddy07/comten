@@ -24,6 +24,8 @@ values = {
     'ALLOW_REAL_MESSAGES': 'false',
     'MSG91_DISPATCH_ENABLED': 'false',
     'ZEPTOMAIL_DISPATCH_ENABLED': 'false',
+    'RESEND_DISPATCH_ENABLED': 'false',
+    'EMAIL_PROVIDER': settings.email_provider,
     'FCM_DISPATCH_ENABLED': 'false',
     'APPROVED_SMS_RECIPIENTS': '',
     'APPROVED_EMAIL_RECIPIENTS': '',
@@ -31,7 +33,8 @@ values = {
 }
 for key in ('r2_endpoint', 'r2_bucket', 'r2_access_key', 'r2_secret_key',
             'msg91_auth_key', 'msg91_widget_id', 'zeptomail_token',
-            'zeptomail_from', 'zeptomail_verified_domain', 'zeptomail_api_origin'):
+            'zeptomail_from', 'zeptomail_verified_domain', 'zeptomail_api_origin',
+            'resend_api_key', 'resend_from', 'resend_verified_domain'):
     value = getattr(settings, key)
     if value:
         values[key.upper()] = value

@@ -42,11 +42,8 @@ class LocationHelper {
   /// Check-out request.
   static Future<LocationResult> getCurrentLocation() async {
     try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        return LocationResult.failure(LocationFailure.serviceDisabled);
-      }
-
+      // Permission is asked before the GPS on/off check so the system
+      // prompt always appears, even when location services are switched off.
       var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -59,10 +56,32 @@ class LocationHelper {
         return LocationResult.failure(LocationFailure.permissionDeniedForever);
       }
 
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        return LocationResult.failure(LocationFailure.serviceDisabled);
+      }
+
       final position = await _acquirePrecisePosition();
       return LocationResult.success(position.latitude, position.longitude);
     } catch (e) {
       return LocationResult.failure(LocationFailure.failed);
+    }
+  }
+
+  /// Whether [failure] can only be fixed outside the app - the OS won't show
+  /// the permission prompt again once it's permanently denied, and location
+  /// services can't be switched on from a runtime prompt.
+  static bool needsSettings(LocationFailure? failure) =>
+      failure == LocationFailure.serviceDisabled ||
+      failure == LocationFailure.permissionDeniedForever;
+
+  /// Opens the system screen that resolves [failure]: the device location
+  /// toggle, or this app's permission page.
+  static Future<void> openSettingsFor(LocationFailure failure) async {
+    if (failure == LocationFailure.serviceDisabled) {
+      await Geolocator.openLocationSettings();
+    } else {
+      await Geolocator.openAppSettings();
     }
   }
 

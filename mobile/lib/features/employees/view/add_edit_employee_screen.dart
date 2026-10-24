@@ -130,7 +130,6 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
           )
         : viewModel.createEmployee(
             CreateEmployeeRequest(
-              employeeCode: _codeController.text.trim(),
               name: _nameController.text.trim(),
               phone: _phoneController.text.trim(),
               email: _emailController.text.trim(),
@@ -159,7 +158,7 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
           isEditMode: widget.isEditMode,
           name: _nameController.text.trim(),
           role: _role!,
-          employeeCode: _codeController.text.trim(),
+          employeeCode: widget.isEditMode ? _codeController.text.trim() : 'Assigned automatically on save',
           phone: _phoneController.text.trim(),
           email: _emailController.text.trim(),
           onConfirmSave: _performSave,
@@ -235,8 +234,8 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
                   controller: _codeController,
                   label: AppStrings.employeeFieldCode,
                   icon: Icons.tag,
-                  readOnly: widget.isEditMode,
-                  validator: Validators.employeeCode,
+                  readOnly: true,
+                  hintText: widget.isEditMode ? null : 'Assigned automatically on save',
                 ),
                 const SizedBox(height: AppDimensions.cardSpacing),
                 AppTextField(

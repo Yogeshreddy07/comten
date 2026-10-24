@@ -349,6 +349,7 @@ class AppStrings {
   static const attendanceLocationCapturing = 'Capturing your location...';
   static const attendanceLocationCaptured = 'Location captured';
   static const attendanceLocationRetry = 'Retry';
+  static const attendanceLocationOpenSettings = 'Settings';
   static const attendanceLocationServiceDisabled =
       'Location services are disabled. Please enable them to continue.';
   static const attendanceLocationPermissionDenied =

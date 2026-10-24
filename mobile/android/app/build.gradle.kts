@@ -77,7 +77,15 @@ android {
 
 val verifyReleaseConfiguration by tasks.registering {
     doLast {
-        require(cloudBuild && signingFile.exists()) { "Release requires explicit cloud configuration and private signing properties" }
+        require(cloudBuild) {
+            "Release requires cloud configuration. From mobile/, use: " +
+                "flutter run --release --dart-define-from-file=../firebase/development.mobile.json"
+        }
+        require(signingFile.exists()) {
+            "Release signing properties missing: ${signingFile.absolutePath}. " +
+                "Configure storeFile, storePassword, keyAlias and keyPassword, " +
+                "or set PMS_ANDROID_KEY_PROPERTIES to your private properties file."
+        }
         val apiUrl = defines["BASE_URL"] ?: ""
         require(apiUrl.startsWith("https://") && URI(apiUrl).host?.endsWith(".invalid") == false) { "Release API must use a configured HTTPS origin" }
     }

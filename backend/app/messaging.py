@@ -53,7 +53,55 @@ def recipient_allowed(channel, recipient):
         raise HTTPException(503,'Dispatch requires an explicitly approved test recipient')
 
 
+EMAIL_PROVIDERS=('resend','zeptomail')
+
+
+def email_provider():
+    provider=settings.email_provider.strip().lower()
+    if provider not in EMAIL_PROVIDERS: raise HTTPException(503,'Unknown email provider')
+    return provider
+
+
+def sender_verified(sender,domain):
+    return bool(domain) and sender.rsplit('@',1)[-1].lower()==domain.strip().lower()
+
+
 async def email(to: str, name: str, subject: str, html: str, *, text: str='', delivery_key: str|None=None):
+    provider=email_provider()
+    send=resend_email if provider=='resend' else zeptomail_email
+    await send(to,name,subject,html,text=text,delivery_key=delivery_key)
+
+
+async def resend_email(to: str, name: str, subject: str, html: str, *, text: str='', delivery_key: str|None=None):
+    recipient_allowed('resend',to)
+    key=settings.resend_api_key.strip();sender=settings.resend_from.strip()
+    if not key or not sender: raise HTTPException(503,'Resend is not configured')
+    if not re.fullmatch(r're_[A-Za-z0-9_]+',key): raise HTTPException(503,'Invalid Resend credential format')
+    if not sender_verified(sender,settings.resend_verified_domain):
+        raise HTTPException(503,'Configure a verified Resend sender domain')
+    from .delivery import reserve,finish
+    reference=delivery_key or secrets.token_hex(16)
+    ref,claimed=reserve('resend',reference)
+    if not claimed: return
+    try:
+        # Resend's idempotency key also deduplicates provider-side for 24 hours.
+        result=await provider_request('POST','https://api.resend.com/emails',headers={'Authorization':'Bearer '+key,'Idempotency-Key':ref.id},json={'from':f'Comten <{sender}>','to':[to],'subject':subject,'html':html,'text':text})
+        if result.status_code!=200:
+            finish(ref,'UNKNOWN' if result.status_code>=500 or result.status_code==429 else 'REJECTED')
+            logging.getLogger('crompton').warning('Resend send rejected: HTTP %s',result.status_code)
+            raise HTTPException(502,'Email provider rejected dispatch')
+        try: request_id=result.json().get('id')
+        except (ValueError,AttributeError):
+            finish(ref,'UNKNOWN');raise HTTPException(502,'Invalid email provider response') from None
+        if not request_id:
+            finish(ref,'UNKNOWN');raise HTTPException(502,'Invalid email provider response')
+        finish(ref,'ACCEPTED',request_id)
+    except HTTPException:
+        if ref.get().to_dict().get('state')=='SENDING': finish(ref,'UNKNOWN')
+        raise
+
+
+async def zeptomail_email(to: str, name: str, subject: str, html: str, *, text: str='', delivery_key: str|None=None):
     recipient_allowed('zeptomail',to)
     key=settings.zeptomail_token.strip();sender=settings.zeptomail_from
     # Match the original integration: the dashboard may include this prefix.
@@ -62,7 +110,7 @@ async def email(to: str, name: str, subject: str, html: str, *, text: str='', de
     if re.search(r'\s',key): raise HTTPException(503,'Invalid ZeptoMail credential format')
     origins={f'https://{host}{suffix}' for host in ('api.zeptomail','cpaas.zoho') for suffix in ('.com','.in','.eu','.com.au','.jp','.cn')}
     origin=settings.zeptomail_api_origin
-    if origin not in origins or not settings.zeptomail_verified_domain or sender.rsplit('@',1)[-1].lower()!=settings.zeptomail_verified_domain.lower():
+    if origin not in origins or not sender_verified(sender,settings.zeptomail_verified_domain):
         raise HTTPException(503,'Configure a verified sender domain and regional API origin')
     from .delivery import reserve,finish
     reference=delivery_key or secrets.token_hex(16)

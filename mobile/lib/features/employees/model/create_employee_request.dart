@@ -1,6 +1,6 @@
 /// Request payload for `POST /api/employees` - mirrors the backend's
-/// `CreateEmployeeRequest` field-for-field. [phone] must be the bare
-/// 10-digit number; the backend prepends +91 itself.
+/// `CreateEmployeeRequest` field-for-field. The backend allocates the next
+/// employee code when omitted and normalizes Indian phone numbers to +91.
 class CreateEmployeeRequest {
   final String employeeCode;
   final String name;
@@ -9,7 +9,7 @@ class CreateEmployeeRequest {
   final String role;
 
   const CreateEmployeeRequest({
-    required this.employeeCode,
+    this.employeeCode = '',
     required this.name,
     required this.phone,
     required this.email,
@@ -18,7 +18,7 @@ class CreateEmployeeRequest {
 
   Map<String, dynamic> toJson() {
     return {
-      'employeeCode': employeeCode,
+      if (employeeCode.isNotEmpty) 'employeeCode': employeeCode,
       'name': name,
       'phone': phone,
       'email': email,

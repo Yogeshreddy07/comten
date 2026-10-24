@@ -32,7 +32,8 @@ class AttendanceScreen extends StatefulWidget {
   State<AttendanceScreen> createState() => _AttendanceScreenState();
 }
 
-class _AttendanceScreenState extends State<AttendanceScreen> {
+class _AttendanceScreenState extends State<AttendanceScreen>
+    with WidgetsBindingObserver {
   // ---- Check-in form state ----
   AttendanceType? _checkInType;
   bool _isLoadingCheckInLocation = false;
@@ -48,10 +49,34 @@ class _AttendanceScreenState extends State<AttendanceScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<AttendanceViewModel>().fetchTodayAttendance();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Coming back from the system settings the location card sent the user
+  /// to (see [LocationHelper.needsSettings]) - capture again so turning on
+  /// GPS or granting permission there takes effect without a manual retry.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (LocationHelper.needsSettings(_checkInLocationResult?.failure) &&
+        !_isLoadingCheckInLocation) {
+      _fetchCheckInLocation();
+    }
+    if (_isCheckingOut &&
+        LocationHelper.needsSettings(_checkOutLocationResult?.failure) &&
+        !_isLoadingCheckOutLocation) {
+      _fetchCheckOutLocation();
+    }
   }
 
   Future<void> _fetchCheckInLocation() async {

@@ -185,7 +185,12 @@ class FirebaseTransport {
       if(uri.queryParameters['fromDate']!=null) data=data.where((r)=>r['workDate'].toString().compareTo(uri.queryParameters['fromDate']!)>=0).toList();
       if(uri.queryParameters['toDate']!=null) data=data.where((r)=>r['workDate'].toString().compareTo(uri.queryParameters['toDate']!)<=0).toList();
       if(collection=='notifications'&&parts.last=='unread-count') return response(data.where((r)=>r['read']!=true).length);
-      var result=await Future.wait(data.map((r)=>decorate(collection,r)));
+      // The led-module pickers only need module fields. Decorating them reads
+      // every employee profile, including historical members no longer in the
+      // lead's peer roster, and can deny the entire picker unnecessarily.
+      final ledPicker=collection=='modules' && parts.contains('led');
+      if(ledPicker) data=data.where((r)=>r['active']==true).toList();
+      var result=ledPicker ? data : await Future.wait(data.map((r)=>decorate(collection,r)));
       if(collection=='projects' && uri.queryParameters['hasInProgressModule']=='true') {
         result=result.where((r)=>(r['modules'] as List).any((m)=>m['active']==true && m['status']=='IN_PROGRESS' && (m['memberIds'] as List).contains(id))).toList();
       }

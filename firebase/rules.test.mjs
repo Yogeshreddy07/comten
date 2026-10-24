@@ -20,6 +20,14 @@ before(async()=>{
  });
 });
 after(async()=>{await env.cleanup()});
+test('lead picker can read assigned modules without reading employee profiles',async()=>{
+ const db=env.authenticatedContext('13').firestore();
+ // Historical module members need not be present in the current peer roster.
+ await assertFails(getDoc(doc(db,'employees','14')));
+ const snapshot=await assertSucceeds(getDocs(query(collection(db,'modules'),where('memberIds','array-contains',13),limit(200))));
+ if(!snapshot.docs.some(d=>d.id==='202')) throw new Error('Assigned module missing');
+ await assertFails(getDocs(query(collection(db,'modules'),limit(200))));
+});
 test('all client roles are denied provider secrets, challenges, delivery and file metadata',async()=>{
  for(const uid of ['11','12','13','14']){
   const db=env.authenticatedContext(uid).firestore();

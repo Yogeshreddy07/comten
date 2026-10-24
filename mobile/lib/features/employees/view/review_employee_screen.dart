@@ -84,7 +84,7 @@ class ReviewEmployeeScreen extends StatelessWidget {
       if(employee is Employee && employee.temporaryPassword!=null) {
         await showDialog<void>(context:context,builder:(dialogContext)=>AlertDialog(
           title:const Text('Account created'),
-          content:SelectableText('Temporary password: ${employee.temporaryPassword}\n\nShare this once through your approved private channel. No email has been sent.'),
+          content:SelectableText('Employee code: ${employee.employeeCode}\nTemporary password: ${employee.temporaryPassword}\n\nShare these through your approved private channel.'),
           actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Done'))],
         ));
         if(!context.mounted) return;

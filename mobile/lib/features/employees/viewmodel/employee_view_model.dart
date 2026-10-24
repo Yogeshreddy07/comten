@@ -50,6 +50,7 @@ class EmployeeViewModel extends ChangeNotifier {
 
     if (result.success) {
       _employees = (result.data as List<Employee>?) ?? [];
+      _employees.sort(Employee.compareByCode);
       _loadState = EmployeeLoadState.success;
     } else {
       _errorMessage = result.message;
@@ -76,7 +77,7 @@ class EmployeeViewModel extends ChangeNotifier {
       final created = result.data as Employee?;
       if (created != null) {
         _employees = [..._employees, created.copyWith()]
-          ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+          ..sort(Employee.compareByCode);
       }
     }
 

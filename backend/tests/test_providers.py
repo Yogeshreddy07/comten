@@ -8,7 +8,7 @@ from app import messaging as adapters
 
 @pytest.fixture
 def configured(monkeypatch):
-    for key,value in {'allow_real_messages':True,'msg91_auth_key':'synthetic','msg91_widget_id':'synthetic-widget','zeptomail_token':'synthetic','zeptomail_from':'sender@example.invalid','msg91_dispatch_enabled':True,'approved_sms_recipients':'919000000000','zeptomail_dispatch_enabled':True,'approved_email_recipients':'test@example.invalid','zeptomail_verified_domain':'example.invalid'}.items():
+    for key,value in {'allow_real_messages':True,'msg91_auth_key':'synthetic','msg91_widget_id':'synthetic-widget','zeptomail_token':'synthetic','zeptomail_from':'sender@example.invalid','msg91_dispatch_enabled':True,'approved_sms_recipients':'919000000000','zeptomail_dispatch_enabled':True,'approved_email_recipients':'test@example.invalid','zeptomail_verified_domain':'example.invalid','email_provider':'zeptomail'}.items():
         monkeypatch.setattr(adapters.settings,key,value)
 
 
@@ -188,3 +188,53 @@ def test_widget_rejects_missing_request_id_and_legacy_template_config(configured
     monkeypatch.setattr(adapters.settings,'msg91_widget_id','')
     with pytest.raises(HTTPException) as error: asyncio.run(adapters.send_msg91('919000000000'))
     assert error.value.status_code==503
+
+
+@pytest.fixture
+def resend(configured,monkeypatch):
+    for key,value in {'email_provider':'resend','resend_dispatch_enabled':True,'resend_api_key':'re_synthetic_key','resend_from':'sender@example.invalid','resend_verified_domain':'example.invalid'}.items():
+        monkeypatch.setattr(adapters.settings,key,value)
+
+
+def test_resend_mail_contract_and_duplicate_claim(resend,monkeypatch):
+    import uuid
+    sent=[]
+    async def fake(method,url,**kw):
+        sent.append((method,url,kw))
+        return httpx.Response(200,json={'id':'synthetic-resend-id'})
+    monkeypatch.setattr(adapters,'provider_request',fake)
+    key=uuid.uuid4().hex
+    for _ in range(2): asyncio.run(adapters.email('test@example.invalid','Synthetic','Test','<p>Test</p>',text='Test',delivery_key=key))
+    assert len(sent)==1
+    method,url,kw=sent[0]
+    assert method=='POST' and url=='https://api.resend.com/emails'
+    assert kw['headers']['Authorization']=='Bearer re_synthetic_key' and kw['headers']['Idempotency-Key']
+    assert kw['json']=={'from':'Comten <sender@example.invalid>','to':['test@example.invalid'],'subject':'Test','html':'<p>Test</p>','text':'Test'}
+
+
+@pytest.mark.parametrize('setting,value',[('resend_dispatch_enabled',False),('resend_verified_domain','different.invalid'),('resend_api_key','not-a-resend-key'),('approved_email_recipients','other@example.invalid'),('email_provider','unknown')])
+def test_resend_gates_never_send(resend,monkeypatch,setting,value):
+    async def forbidden(*a,**kw): pytest.fail('Gated email reached provider')
+    monkeypatch.setattr(adapters,'provider_request',forbidden)
+    monkeypatch.setattr(adapters.settings,setting,value)
+    with pytest.raises(HTTPException) as error: asyncio.run(adapters.email('test@example.invalid','Test','Test','<p>Test</p>'))
+    assert error.value.status_code==503
+
+
+def test_zeptomail_switch_does_not_enable_resend(resend,monkeypatch):
+    monkeypatch.setattr(adapters.settings,'resend_dispatch_enabled',False)
+    monkeypatch.setattr(adapters.settings,'zeptomail_dispatch_enabled',True)
+    with pytest.raises(HTTPException) as error: asyncio.run(adapters.email('test@example.invalid','Test','Test','<p>Test</p>'))
+    assert error.value.status_code==503
+
+
+@pytest.mark.parametrize('status,payload,state',[(422,{'message':'private-provider-detail'},'REJECTED'),(500,{},'UNKNOWN'),(200,{},'UNKNOWN')])
+def test_resend_failures_are_recorded_without_provider_detail(resend,monkeypatch,caplog,status,payload,state):
+    import uuid
+    from app.delivery import reserve
+    async def fake(*a,**kw): return httpx.Response(status,json=payload)
+    monkeypatch.setattr(adapters,'provider_request',fake)
+    key=uuid.uuid4().hex
+    with pytest.raises(HTTPException) as error: asyncio.run(adapters.email('test@example.invalid','Test','Test','<p>Test</p>',delivery_key=key))
+    assert error.value.status_code==502 and 'private' not in caplog.text and 'test@example.invalid' not in caplog.text
+    with pytest.raises(HTTPException): reserve('resend',key)

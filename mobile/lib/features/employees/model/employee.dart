@@ -30,6 +30,17 @@ class Employee {
   String get phoneLocal =>
       phone.startsWith('+91') ? phone.substring(3) : phone;
 
+  static int compareByCode(Employee a, Employee b) {
+    final pattern = RegExp(r'^(.*?)(\d+)$');
+    final left = pattern.firstMatch(a.employeeCode.toUpperCase());
+    final right = pattern.firstMatch(b.employeeCode.toUpperCase());
+    if (left != null && right != null && left[1] == right[1]) {
+      final order = BigInt.parse(left[2]!).compareTo(BigInt.parse(right[2]!));
+      if (order != 0) return order;
+    }
+    return a.employeeCode.toUpperCase().compareTo(b.employeeCode.toUpperCase());
+  }
+
   factory Employee.fromJson(Map<String, dynamic> json) {
     return Employee(
       id: json['id'] as int,

@@ -101,7 +101,7 @@ def r2():
 
 try:
     if not any((args.sms_send,args.email_send,args.r2_live)):
-        print(json.dumps({'msg91Configured':bool(settings.msg91_auth_key and settings.msg91_widget_id),'zeptomailConfigured':bool(settings.zeptomail_token and settings.zeptomail_from and settings.zeptomail_verified_domain),'r2Configured':bool(settings.r2_access_key and settings.r2_secret_key and settings.r2_endpoint),'dispatchEnabled':settings.allow_real_messages}))
+        print(json.dumps({'msg91Configured':bool(settings.msg91_auth_key and settings.msg91_widget_id),'emailProvider':settings.email_provider,'resendConfigured':bool(settings.resend_api_key and settings.resend_from and settings.resend_verified_domain),'zeptomailConfigured':bool(settings.zeptomail_token and settings.zeptomail_from and settings.zeptomail_verified_domain),'r2Configured':bool(settings.r2_access_key and settings.r2_secret_key and settings.r2_endpoint),'dispatchEnabled':settings.allow_real_messages}))
     else:
         asyncio.run(messages())
         if args.r2_live: r2()

@@ -21,7 +21,7 @@ class ProviderDotEnvSource(DotEnvSettingsSource):
             if legacy and not values.get('zeptomail_token'):
                 values['zeptomail_token'] = legacy
             for key, value in values.items():
-                if key.startswith(('msg91_', 'zeptomail_', 'r2_')) and not str(value or '').strip():
+                if key.startswith(('msg91_', 'zeptomail_', 'resend_', 'r2_')) and not str(value or '').strip():
                     continue
                 merged[key] = value
         return merged
@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     zeptomail_verified_domain: str = ''
     zeptomail_token: str = ''
     zeptomail_from: str = ''
+    # Active transactional email provider: 'resend' or 'zeptomail'.
+    email_provider: str = 'resend'
+    resend_dispatch_enabled: bool = False
+    resend_api_key: str = ''
+    resend_from: str = ''
+    resend_verified_domain: str = ''
 
 
 settings = Settings()

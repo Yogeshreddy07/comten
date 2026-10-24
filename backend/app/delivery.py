@@ -43,12 +43,14 @@ def event(uid, kind, key, **values):
 
 def queue_event(uid, kind, key, **values):
     from .config import settings
-    if not settings.allow_real_messages or not settings.zeptomail_dispatch_enabled: return
     from .store import get
-    from .messaging import recipient_allowed
+    from .messaging import recipient_allowed,email_provider
+    try: provider=email_provider()
+    except HTTPException: return
+    if not settings.allow_real_messages or not getattr(settings,provider+'_dispatch_enabled'): return
     person=get('employees',uid)
     if not person or not person.get('active') or not person.get('email'): return
-    try: recipient_allowed('zeptomail',person['email'])
+    try: recipient_allowed(provider,person['email'])
     except HTTPException: return
     doc=hashlib.sha256(key.encode()).hexdigest()
     from google.api_core.exceptions import AlreadyExists

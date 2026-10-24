@@ -143,10 +143,27 @@ class PushNotificationService {
   /// Registers (and keeps registered, across token refreshes) this device
   /// for [employeeCode] - call once the user is signed in.
   Future<void> syncToken(String employeeCode) async {
+    await requestPermission();
     try { await _syncToken(employeeCode); }
     on FirebaseException catch(e) { debugPrint('Push registration unavailable: ${e.code}'); }
     on PlatformException catch(e) { debugPrint('Push registration unavailable: ${e.code}'); }
     on TimeoutException { debugPrint('Push registration timed out'); }
+  }
+
+  /// Shows the system "Allow notifications?" prompt (Android 13+) if it
+  /// hasn't been answered yet. Deliberately independent of Firebase: if FCM
+  /// setup fails or the emulator build is running, the prompt must still
+  /// appear, otherwise Android silently drops every notification.
+  Future<void> requestPermission() async {
+    if (kIsWeb) return;
+    try {
+      await _localNotifications
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>()
+          ?.requestNotificationsPermission();
+    } on PlatformException catch (e) {
+      debugPrint('Notification permission request unavailable: ${e.code}');
+    }
   }
 
   Future<void> _syncToken(String employeeCode) async {
