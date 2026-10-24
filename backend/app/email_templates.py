@@ -10,7 +10,7 @@ def render(kind, name, **values):
     elif kind=='recovery':
         message=f"Your verification code is {values['otp']}. It expires in 10 minutes. Do not share this code with anyone."
     elif kind=='invitation':
-        message=f"Your employee account {values['code']} has been created. Open Activate Account, enter your employee code and verify the OTP sent to your registered email. Then set your password and log in."
+        message=f"Your employee account {values['code']} has been created. Open Activate Account, enter your employee code and tap Send OTP to receive a verification code at your registered email. Verify that code, then set your password and log in."
     elif kind=='activation': message='Your account has been activated. Sign in to Comten using your existing credentials.'
     elif kind=='security': message=values.get('message','Your account security settings changed. Contact your administrator immediately if you did not request this change.')
     else: message=values.get('message','An approval has been updated. Open Comten to review the details.')

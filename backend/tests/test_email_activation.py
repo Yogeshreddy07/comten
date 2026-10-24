@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import time
 import uuid
 import pytest
@@ -61,6 +63,34 @@ def test_resend_is_idempotent_during_cooldown(client):
     before=get('email-activation',uid)
     assert client.post('/api/auth/signup/send-otp',json={'employeeCode':person['employeeCode']}).status_code==200
     assert get('email-activation',uid)==before
+
+
+def test_creation_queues_welcome_without_otp_and_worker_sends_once(client,monkeypatch):
+    from app import delivery
+    from app.email_templates import render
+    for key,value in {'allow_real_messages':True,'email_provider':'resend','resend_dispatch_enabled':True}.items():
+        monkeypatch.setattr(messaging.settings,key,value)
+    # Synthetic recipients only; no provider request is made in this test.
+    monkeypatch.setattr(messaging,'recipient_allowed',lambda *args:None)
+    monkeypatch.setattr(delivery,'event',delivery.queue_event)
+    sent=[]
+    async def accepted(*args,**kwargs):sent.append((args,kwargs))
+    monkeypatch.setattr(messaging,'email',accepted)
+    person=create(client)
+    key=hashlib.sha256(('employee-invited-'+str(person['id'])).encode()).hexdigest()
+    queued=get('email-outbox',key)
+    assert queued['kind']=='invitation' and queued['values']=={'code':person['employeeCode']}
+    assert queued['state']=='PENDING'
+    assert get('email-activation',person['id']) is None
+    delivery.event(person['id'],'invitation','employee-invited-'+str(person['id']),code=person['employeeCode'])
+    asyncio.run(delivery.dispatch_emails())
+    asyncio.run(delivery.dispatch_emails())
+    assert len(sent)==1
+    subject,html,text=render('invitation',person['name'],code=person['employeeCode'])
+    assert sent[0][0]==(person['email'],person['name'],subject,html)
+    assert sent[0][1]['text']==text and 'tap Send OTP' in text
+    assert get('email-outbox',key)['state']=='ACCEPTED'
+    assert get('email-activation',person['id']) is None
 
 
 def test_provider_failure_is_visible_and_does_not_lose_created_employee(client,monkeypatch):

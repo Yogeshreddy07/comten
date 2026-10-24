@@ -60,7 +60,15 @@ async def send_activation(person):
             await email(person['email'], person['name'], subject, html, text=text, delivery_key='activation-' + generation)
     except HTTPException as error:
         ref.update({'deliveryState': 'FAILED', 'otpHash': 'unavailable'})
-        logging.getLogger('crompton').warning('Activation email dispatch failed: status %s', error.status_code)
+        category = {
+            'Resend API key is not configured': 'MISSING_RESEND_API_KEY',
+            'Resend sender is not configured': 'MISSING_RESEND_SENDER',
+            'Invalid Resend credential format': 'INVALID_RESEND_API_KEY',
+            'Configure a verified Resend sender domain': 'RESEND_SENDER_DOMAIN',
+            'External messaging is disabled in this environment': 'MESSAGING_DISABLED',
+            'Dispatch requires an explicitly approved test recipient': 'DISPATCH_OR_RECIPIENT_DISABLED',
+        }.get(error.detail, 'PROVIDER_UNAVAILABLE')
+        logging.getLogger('crompton').warning('Activation email dispatch failed: status %s; category %s', error.status_code, category)
         raise HTTPException(503, 'Unable to send the verification email. Contact your administrator or retry after one minute.') from None
     ref.update({'deliveryState': 'ACCEPTED'})
     return True

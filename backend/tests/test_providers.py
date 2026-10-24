@@ -228,6 +228,16 @@ def test_zeptomail_switch_does_not_enable_resend(resend,monkeypatch):
     assert error.value.status_code==503
 
 
+def test_missing_resend_key_never_calls_provider(resend,monkeypatch):
+    monkeypatch.setattr(adapters.settings,'resend_api_key','')
+    async def forbidden(*a,**kw):pytest.fail('Missing credential reached provider')
+    monkeypatch.setattr(adapters,'provider_request',forbidden)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(adapters.email('test@example.invalid','Test','Test','<p>Test</p>'))
+    assert error.value.status_code==503
+    assert error.value.detail=='Resend API key is not configured'
+
+
 @pytest.mark.parametrize('status,payload,state',[(422,{'message':'private-provider-detail'},'REJECTED'),(500,{},'UNKNOWN'),(200,{},'UNKNOWN')])
 def test_resend_failures_are_recorded_without_provider_detail(resend,monkeypatch,caplog,status,payload,state):
     import uuid

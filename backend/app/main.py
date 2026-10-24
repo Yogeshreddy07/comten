@@ -149,6 +149,8 @@ async def provision(body: EmployeeCreate, user=Depends(current_user)):
         raise
     record['active'] = True
     record.pop('provisioning', None)
+    from .delivery import event
+    event(int(uid),'invitation','employee-invited-'+uid,code=code)
     return ok(record | {'activationEmailSent':False}, 'Employee created. Enter the employee code in Activate Account and tap Send OTP to receive the verification email.')
 
 

@@ -80,7 +80,8 @@ async def email(to: str, name: str, subject: str, html: str, *, text: str='', de
 async def resend_email(to: str, name: str, subject: str, html: str, *, text: str='', delivery_key: str|None=None):
     recipient_allowed('resend',to)
     key=settings.resend_api_key.strip();sender=settings.resend_from.strip()
-    if not key or not sender: raise HTTPException(503,'Resend is not configured')
+    if not key: raise HTTPException(503,'Resend API key is not configured')
+    if not sender: raise HTTPException(503,'Resend sender is not configured')
     if not re.fullmatch(r're_[A-Za-z0-9_]+',key): raise HTTPException(503,'Invalid Resend credential format')
     if not sender_verified(sender,settings.resend_verified_domain):
         raise HTTPException(503,'Configure a verified Resend sender domain')

@@ -1,6 +1,7 @@
 # Email OTP activation and recovery
 
-Creating or inviting an employee does not send an activation OTP. The employee
+Creating or inviting an employee queues a welcome email with their employee
+code and activation instructions, without an OTP or password. The employee
 opens Activate Account, enters their employee code, and taps Send OTP to receive
 it at their registered email. The screen verifies that OTP, then opens password
 setup and returns to Login. No temporary
@@ -24,9 +25,14 @@ EMAIL_PROVIDER=resend
 RESEND_FROM=no-reply@virtualfinpros.com
 RESEND_VERIFIED_DOMAIN=virtualfinpros.com
 RESEND_DISPATCH_ENABLED=true
+RESEND_API_KEY=<private Resend key>
 ALLOW_REAL_MESSAGES=true
 EMAIL_REGISTERED_RECIPIENTS_ENABLED=true
 ```
+
+The key must be saved in the hosted Railway service variables and deployed;
+a key in the local `.env` is not available to the hosted API. A missing key
+logs `MISSING_RESEND_API_KEY` without exposing credentials or email content.
 
 The enrolled-recipient switch permits only unique, active, non-deleted employee
 emails, excluding placeholder domains. Other addresses still require the exact
