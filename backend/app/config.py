@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     msg91_widget_id: str = ''
     msg91_dispatch_enabled: bool = False
     approved_sms_recipients: str = ''
+    sms_registered_recipients_enabled: bool = False
     zeptomail_dispatch_enabled: bool = False
     approved_email_recipients: str = ''
     email_registered_recipients_enabled: bool = False

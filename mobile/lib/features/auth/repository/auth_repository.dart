@@ -72,6 +72,16 @@ class AuthRepository {
     return _post('/auth/signup/verify-otp', {'employeeCode': employeeCode, 'otp': otp});
   }
 
+  Future<ApiResult> sendActivationPhoneOtp(String employeeCode, String token) {
+    return _post('/auth/signup/phone/send-otp', {'employeeCode': employeeCode, 'phoneVerificationToken': token},
+      timeout: const Duration(seconds: ApiConstants.otpSendTimeoutSeconds));
+  }
+
+  Future<ApiResult> verifyActivationPhoneOtp(String employeeCode, String token, String otp) {
+    return _post('/auth/signup/phone/verify-otp', {'employeeCode': employeeCode, 'phoneVerificationToken': token, 'otp': otp},
+      timeout: const Duration(seconds: ApiConstants.otpSendTimeoutSeconds));
+  }
+
   Future<ApiResult> verifyTempPassword({
     required String employeeCode,
     required String tempPassword,

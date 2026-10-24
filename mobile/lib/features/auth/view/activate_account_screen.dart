@@ -23,6 +23,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
   final _otp = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _sent = false;
+  String _maskedEmail = 'your registered email';
   int _remaining = 0;
   Timer? _timer;
 
@@ -38,7 +39,11 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     final result = await vm.sendActivationOtp(_code.text.trim().toUpperCase());
     if (!mounted) return;
     if (!result.success) { SnackbarUtil.showError(context, result.message); return; }
-    setState(() { _sent = true; _remaining = 60; _otp.clear(); });
+    setState(() {
+      _sent = true; _remaining = 60; _otp.clear();
+      _maskedEmail = result.data is Map && result.data['maskedEmail'] is String
+          ? result.data['maskedEmail'] as String : 'your registered email';
+    });
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (!mounted) { timer.cancel(); return; }
@@ -66,7 +71,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     return AuthScaffold(title: 'Activate Account', child: Form(key: _formKey, child: Column(children: [
       const SizedBox(height: 20),
       AuthHeader(icon: Icons.mark_email_read_outlined, title: 'Activate Account', subtitle: _sent
-        ? 'Enter the 6-digit OTP sent to your registered email. Then set your password.'
+        ? 'Enter the 6-digit OTP sent to $_maskedEmail. Then set your password and verify your phone.'
         : 'Enter your employee code to receive an OTP at your registered email address.'),
       const SizedBox(height: 24),
       AuthTextField(controller: _code, label: 'Employee Code', icon: Icons.badge_outlined,

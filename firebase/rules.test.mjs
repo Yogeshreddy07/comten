@@ -26,6 +26,12 @@ test('pending email activation cannot access Firestore even with a token',async(
  await assertFails(getDoc(doc(db,'employees','16')));
  await assertFails(getDocs(query(collection(db,'activities'),limit(10))));
 });
+test('pending phone activation cannot access Firestore even with a token',async()=>{
+ await env.withSecurityRulesDisabled(async c=>setDoc(doc(c.firestore(),'employees','17'),{id:17,role:'EMPLOYEE',active:true,emailVerified:true,activationStatus:'PHONE_PENDING'}));
+ const db=env.authenticatedContext('17').firestore();
+ await assertFails(getDoc(doc(db,'employees','17')));
+ await assertFails(getDocs(query(collection(db,'activities'),limit(10))));
+});
 test('lead picker can read assigned modules without reading employee profiles',async()=>{
  const db=env.authenticatedContext('13').firestore();
  // Historical module members need not be present in the current peer roster.

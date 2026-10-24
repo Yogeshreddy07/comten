@@ -111,7 +111,7 @@ async def login(body: dict):
     if result.status_code != 200: raise HTTPException(401,'Invalid credentials')
     data = result.json()
     user = get('employees',data['localId'])
-    if not user or not user.get('active') or user.get('activationStatus') == 'PENDING': raise HTTPException(401,'Invalid credentials')
+    if not user or not user.get('active') or user.get('activationStatus') in ('PENDING', 'PHONE_PENDING'): raise HTTPException(401,'Invalid credentials')
     return ok({**user,'userId':user['id'],'token':data['idToken']})
 
 

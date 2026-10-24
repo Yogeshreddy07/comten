@@ -15,7 +15,7 @@ def current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
         user = get('employees', token['uid'])
     except Exception:
         raise HTTPException(401, 'Session expired') from None
-    if not user or not user.get('active') or user.get('activationStatus') == 'PENDING' or user.get('role') not in ROLES:
+    if not user or not user.get('active') or user.get('activationStatus') in ('PENDING', 'PHONE_PENDING') or user.get('role') not in ROLES:
         raise HTTPException(403, 'Account is inactive')
     return user
 

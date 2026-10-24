@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signed() { return request.auth != null; }
     function profile() { return get(/databases/$(database)/documents/employees/$(request.auth.uid)).data; }
-    function active() { return signed() && profile().active == true && profile().get('activationStatus', 'ACTIVE') != 'PENDING'; }
+    function active() { return signed() && profile().active == true && !(profile().get('activationStatus', 'ACTIVE') in ['PENDING','PHONE_PENDING']); }
     function manager() { return active() && profile().role in ['CAPTAIN','PROJECT_CONTROLLER']; }
     function owner(id) { return active() && string(profile().id) == string(id); }
     function bounded() { return request.query.limit != null && request.query.limit <= 200; }

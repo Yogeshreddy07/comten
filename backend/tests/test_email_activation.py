@@ -12,7 +12,7 @@ from conftest import activate_employee
 
 
 def create(client):
-    response=client.post('/api/employees',json={'name':'Email activation test','role':'EMPLOYEE','email':uuid.uuid4().hex+'@example.invalid'})
+    response=client.post('/api/employees',json={'name':'Email activation test','role':'EMPLOYEE','email':uuid.uuid4().hex+'@example.invalid','phone':'9'+str(uuid.uuid4().int%1000000000).zfill(9)})
     assert response.status_code==200,response.text
     return response.json()['data']
 
@@ -139,3 +139,93 @@ def test_recovery_delivery_failure_does_not_claim_success_on_retry(client,monkey
     request={'employeeCode':person['employeeCode'],'email':person['email']}
     assert client.post('/api/auth/forgot-password/send-otp',json=request).status_code==503
     assert client.post('/api/auth/forgot-password/send-otp',json=request).status_code==429
+
+
+def password_stage(client, person):
+    code=person['employeeCode']
+    sent=client.post('/api/auth/signup/send-otp',json={'employeeCode':code})
+    assert sent.status_code==200
+    assert '**' in sent.json()['data']['maskedEmail']
+    assert person['email'] not in sent.text
+    verified=client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'})
+    proof=verified.json()['data']['signupToken']
+    response=client.post('/api/auth/signup/set-password',json={'employeeCode':code,'signupToken':proof,
+        'newPassword':'ValidPassword123!','confirmPassword':'ValidPassword123!'})
+    assert response.status_code==200,response.text
+    return {'employeeCode':code,'phoneVerificationToken':response.json()['data']['phoneVerificationToken']}
+
+
+def test_login_locked_until_both_verifications_and_phone_proof_single_use(client):
+    person=create(client);request=password_stage(client,person);uid=str(person['id'])
+    assert get('employees',uid)['activationStatus']=='PHONE_PENDING'
+    assert auth.get_user(uid).disabled
+    assert client.post('/api/auth/login',json={'employeeCode':person['employeeCode'],'password':'ValidPassword123!'}).status_code==401
+    reset=client.post('/api/auth/forgot-password/send-otp',json={'employeeCode':person['employeeCode'],'email':person['email']})
+    assert reset.status_code==200 and get('recovery',uid) is None
+    assert client.post('/api/auth/signup/phone/send-otp',json=request|{'phoneVerificationToken':'forged'}).status_code==401
+    sent=client.post('/api/auth/signup/phone/send-otp',json=request)
+    assert sent.status_code==200 and '**' in sent.json()['data']['maskedPhone']
+    assert person['phone'] not in sent.text
+    assert client.post('/api/auth/signup/phone/send-otp',json=request).status_code==429
+    assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'000000'}).status_code==401
+    response=client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'123456'})
+    assert response.status_code==200,response.text
+    assert response.json()['data'] is None
+    assert get('employees',uid)['activationStatus']=='ACTIVE'
+    assert get('employees',uid)['emailVerified'] and get('employees',uid)['phoneVerified']
+    assert not auth.get_user(uid).disabled
+    assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'123456'}).status_code==401
+    assert client.post('/api/auth/login',json={'employeeCode':person['employeeCode'],'password':'ValidPassword123!'}).status_code==200
+
+
+@pytest.mark.parametrize('change',[{'phone':'+919876543210'},{'email':'changed@example.invalid'}])
+def test_phone_session_expires_when_enrolled_contact_changes(client,change):
+    person=create(client);request=password_stage(client,person)
+    db.collection('employees').document(str(person['id'])).update(change)
+    assert client.post('/api/auth/signup/phone/send-otp',json=request).status_code==401
+
+
+def test_phone_session_expiry_and_missing_phone_block_activation(client):
+    person=create(client);request=password_stage(client,person)
+    db.collection('email-activation').document(str(person['id'])).update({'phoneExpires':time.time()-1})
+    assert client.post('/api/auth/signup/phone/send-otp',json=request).status_code==401
+    assert auth.get_user(str(person['id'])).disabled
+
+
+def test_phone_enable_failure_can_retry_without_sending_another_sms(client,monkeypatch):
+    person=create(client);request=password_stage(client,person)
+    assert client.post('/api/auth/signup/phone/send-otp',json=request).status_code==200
+    update=auth.update_user
+    def fail_enable(uid,**kwargs):
+        if kwargs.get('disabled') is False:raise RuntimeError('synthetic outage')
+        return update(uid,**kwargs)
+    monkeypatch.setattr(auth,'update_user',fail_enable)
+    assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'123456'}).status_code==502
+    assert auth.get_user(str(person['id'])).disabled
+    monkeypatch.setattr(auth,'update_user',update)
+    assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'123456'}).status_code==200
+
+
+def test_simultaneous_phone_completion_does_not_disable_activated_account(client):
+    from concurrent.futures import ThreadPoolExecutor
+    person=create(client);request=password_stage(client,person)
+    assert client.post('/api/auth/signup/phone/send-otp',json=request).status_code==200
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses=list(pool.map(lambda _:client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'123456'}),range(2)))
+    assert sum(r.status_code==200 for r in responses)==1
+    assert all(r.status_code in (200,401,409) for r in responses)
+    assert not auth.get_user(str(person['id'])).disabled
+    assert get('employees',person['id'])['activationStatus']=='ACTIVE'
+
+
+def test_enrolled_sms_scope_rejects_unknown_and_deleted_contacts(client,monkeypatch):
+    person=create(client)
+    monkeypatch.setattr(messaging.settings,'allow_real_messages',True)
+    monkeypatch.setattr(messaging.settings,'msg91_dispatch_enabled',True)
+    monkeypatch.setattr(messaging.settings,'sms_registered_recipients_enabled',True)
+    monkeypatch.setattr(messaging.settings,'approved_sms_recipients','')
+    number=messaging.normalize_phone(person['phone'])
+    messaging.recipient_allowed('msg91',number)
+    with pytest.raises(HTTPException): messaging.recipient_allowed('msg91','919000000099')
+    db.collection('employees').document(str(person['id'])).update({'deleted':True})
+    with pytest.raises(HTTPException): messaging.recipient_allowed('msg91',number)

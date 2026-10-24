@@ -23,6 +23,7 @@ values = {
     'WEB_ORIGIN': 'http://127.0.0.1:3000',
     'ALLOW_REAL_MESSAGES': 'false',
     'MSG91_DISPATCH_ENABLED': 'false',
+    'SMS_REGISTERED_RECIPIENTS_ENABLED': 'false',
     'ZEPTOMAIL_DISPATCH_ENABLED': 'false',
     'RESEND_DISPATCH_ENABLED': 'false',
     'EMAIL_REGISTERED_RECIPIENTS_ENABLED': 'false',

@@ -3,8 +3,9 @@
 Creating or inviting an employee queues a welcome email with their employee
 code and activation instructions, without an OTP or password. The employee
 opens Activate Account, enters their employee code, and taps Send OTP to receive
-it at their registered email. The screen verifies that OTP, then opens password
-setup and returns to Login. No temporary
+it at their registered email, shown partially masked in the app. The screen verifies
+that OTP, then opens password setup followed by enrolled-phone SMS verification.
+Only after both checks succeed does it return to Login. No temporary
 password is returned, displayed, emailed or placed in the outbox. Firebase has
 an undisclosed random credential while pending, and the account is disabled.
 Existing activated accounts and passwords are preserved. Legacy accounts that
@@ -14,6 +15,11 @@ Activation OTPs expire in 10 minutes, permit five attempts, and have a 60-second
 resend cooldown and five sends per hour. Only HMAC hashes are stored; OTPs and
 password-setup proofs are single-use, purpose-separated, and bound to the
 employee's current email. Pending accounts cannot access the API or Firestore.
+After password setup the account remains disabled in `PHONE_PENDING`. A separate
+30-minute phone session is bound to the verified email and enrolled phone, can
+only send/verify that phone's OTP, and grants no application access. The final
+SMS verification activates the account and consumes the session. Contact changes
+invalidate it. Existing activated accounts are not forced through this flow again.
 Forgot Password retains its email OTP / new password flow, now with visible
 dispatch errors and email binding. It cannot bypass pending account activation.
 
@@ -28,15 +34,18 @@ RESEND_DISPATCH_ENABLED=true
 RESEND_API_KEY=<private Resend key>
 ALLOW_REAL_MESSAGES=true
 EMAIL_REGISTERED_RECIPIENTS_ENABLED=true
+MSG91_DISPATCH_ENABLED=true
+SMS_REGISTERED_RECIPIENTS_ENABLED=true
 ```
 
 The key must be saved in the hosted Railway service variables and deployed;
 a key in the local `.env` is not available to the hosted API. A missing key
 logs `MISSING_RESEND_API_KEY` without exposing credentials or email content.
 
-The enrolled-recipient switch permits only unique, active, non-deleted employee
-emails, excluding placeholder domains. Other addresses still require the exact
-approved-recipient list. SMS and FCM retain their independent controls. Local
+The enrolled-recipient switches permit only unique, active, non-deleted employee
+contacts, excluding placeholder email domains. Other addresses require the exact
+approved-recipient list. SMS uses the existing MSG91 widget with its own channel
+switch and enrolled-phone check; FCM retains its independent controls. Local
 emulators use synthetic OTP `123456` and send no real activation/recovery mail.
 
 OTP emails are sent directly by the API so no worker is needed for activation

@@ -1,8 +1,8 @@
 # Crompton PMS
 
-Email activation now uses **employee code → registered-email OTP → password setup
-→ login**, with no temporary password or required SMS step for new email-verified
-accounts. Forgot Password also uses email OTP. See [email setup and delivery
+Activation now uses **employee code → registered-email OTP → password setup
+→ enrolled-phone OTP → login**, with no temporary password. Both contact checks
+must finish before a new account can log in. Forgot Password uses email OTP. See [email setup and delivery
 checks](docs/email-otp.md) for Resend testing switches and account migration behavior.
 
 Railway backend setup: [step-by-step deployment guide](backend/RAILWAY.md).

@@ -42,7 +42,7 @@ class FirebaseTransport {
     final user=auth.currentUser;
     if(user==null) throw StateError('Sign in required');
     final data=(await db.collection('employees').doc(user.uid).get(const GetOptions(source:Source.server)).timeout(const Duration(seconds:8))).data();
-    if(data==null || data['active']!=true || data['activationStatus']=='PENDING') {
+    if(data==null || data['active']!=true || ['PENDING','PHONE_PENDING'].contains(data['activationStatus'])) {
       await AccountCache.instance.clear(); await auth.signOut();
       throw StateError('Account is inactive');
     }

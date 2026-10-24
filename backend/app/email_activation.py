@@ -9,7 +9,7 @@ from firebase_admin import auth, firestore
 from .config import settings
 from .store import db, get, transact
 from .recovery import digest, resolve
-from .messaging import email
+from .messaging import email, normalize_phone
 from .email_templates import render
 from .models import valid_password
 
@@ -17,10 +17,21 @@ router = APIRouter(prefix='/api/auth/signup')
 GENERIC = 'If this account needs activation, an OTP has been sent to its registered email.'
 
 
+def mask_email(value):
+    local, _, domain = str(value).strip().partition('@')
+    return local[:1] + '**' + (local[-1:] if len(local) > 2 else '') + '@' + domain
+
+
+def mask_phone(value):
+    phone = normalize_phone(value)
+    return '+' + '*' * (len(phone) - 4) + phone[-4:]
+
+
 def eligible(person):
     return bool(person and person.get('active') and not person.get('deleted')
                 and person.get('activationStatus') != 'ACTIVE'
-                and not person.get('phoneVerified') and person.get('email'))
+                and (person.get('activationStatus') in ('PENDING', 'PHONE_PENDING') or not person.get('phoneVerified'))
+                and person.get('email'))
 
 
 def recipient_hash(person):
@@ -41,7 +52,8 @@ async def send_activation(person):
         old = ref.get(transaction=tx).to_dict() or {}
         count = old.get('sendCount', 0) if old.get('sendWindow', 0) > now - 3600 else 0
         if old.get('lastSent', 0) > now - 60:
-            if old.get('deliveryState') == 'ACCEPTED' and old.get('recipientHash') == recipient_hash(person):
+            if (old.get('deliveryState') == 'ACCEPTED' and old.get('recipientHash') == recipient_hash(person)
+                    and old.get('expires', 0) > now and old.get('otpHash') != 'consumed'):
                 return False
             raise HTTPException(429, 'Wait one minute before requesting another OTP')
         if count >= 5:
@@ -49,7 +61,7 @@ async def send_activation(person):
         tx.set(ref, {'generation': generation, 'otpHash': digest('activation:' + uid + ':' + otp),
                      'recipientHash': recipient_hash(person), 'expires': now + 600, 'attempts': 0,
                      'lastSent': now, 'sendCount': count + 1, 'sendWindow': old.get('sendWindow', now) if count else now,
-                     'deliveryState': 'SENDING', 'proofHash': None})
+                     'deliveryState': 'SENDING', 'proofHash': None}, merge=True)
         return True
 
     if not transact(reserve):
@@ -77,9 +89,11 @@ async def send_activation(person):
 @router.post('/send-otp')
 async def send(body: dict):
     person = resolve(body.get('employeeCode', ''))
+    data = None
     if eligible(person):
         await send_activation(person)
-    return {'success': True, 'data': None, 'message': GENERIC}
+        data = {'maskedEmail': mask_email(person['email'])}
+    return {'success': True, 'data': data, 'message': GENERIC}
 
 
 @router.post('/verify-otp')
@@ -117,10 +131,12 @@ def set_password(body: dict):
         raise HTTPException(422, 'Use matching passwords with at least 8 characters, uppercase, lowercase, a number and a special character')
     if not eligible(person):
         raise HTTPException(401, 'Invalid or expired activation session')
+    phone = normalize_phone(person.get('phone', ''))
     uid = str(person['id'])
     ref = db.collection('email-activation').document(uid)
     employee = db.collection('employees').document(uid)
     claim_id = secrets.token_hex(16)
+    phone_token = secrets.token_urlsafe(32)
 
     @firestore.transactional
     def claim(tx):
@@ -129,13 +145,13 @@ def set_password(body: dict):
                 or state.get('recipientHash') != recipient_hash(person) or not state.get('proofHash')
                 or not hmac.compare_digest(state['proofHash'], digest(str(body.get('signupToken', ''))))):
             return False
-        tx.update(ref, {'claim': claim_id, 'busyUntil': time.time() + 60})
+        tx.update(ref, {'claim': claim_id, 'busyUntil': time.time() + 180})
         return True
 
     if not transact(claim):
         raise HTTPException(401, 'Invalid or expired activation session')
     try:
-        auth.update_user(uid, password=password, disabled=False)
+        auth.update_user(uid, password=password, disabled=True)
         auth.revoke_refresh_tokens(uid)
 
         @firestore.transactional
@@ -146,9 +162,13 @@ def set_password(body: dict):
                     or recipient_hash(current) != state.get('recipientHash')
                     or state.get('expires', 0) < time.time()):
                 raise HTTPException(409, 'Account details changed. Request a new OTP.')
-            tx.update(employee, {'activationStatus': 'ACTIVE', 'emailVerified': True,
+            if normalize_phone(current.get('phone', '')) != phone:
+                raise HTTPException(409, 'Account details changed. Request a new OTP.')
+            tx.update(employee, {'activationStatus': 'PHONE_PENDING', 'emailVerified': True, 'phoneVerified': False,
                                  'permissionVersion': firestore.Increment(1)})
-            tx.update(ref, {'proofHash': None, 'expires': 0, 'busyUntil': 0})
+            tx.update(ref, {'proofHash': None, 'expires': 0, 'busyUntil': 0,
+                            'phoneTokenHash': digest(phone_token), 'phoneExpires': time.time() + 1800,
+                            'phoneHash': digest('phone:' + phone), 'passwordSetAt': time.time()})
         transact(finish)
     except Exception as error:
         if person.get('activationStatus') == 'PENDING':
@@ -156,4 +176,90 @@ def set_password(body: dict):
         ref.update({'busyUntil': 0})
         if isinstance(error, HTTPException): raise
         raise HTTPException(502, 'Password service is temporarily unavailable. Retry this activation session.') from None
-    return {'success': True, 'data': None, 'message': 'Password set. Log in with your employee code and new password.'}
+    return {'success': True, 'data': {'employeeCode': person['employeeCode'],
+            'phoneVerificationToken': phone_token, 'maskedPhone': mask_phone(phone)},
+            'message': 'Password set successfully. Verify your enrolled phone to finish activation.'}
+
+
+def phone_session(body):
+    person = resolve(body.get('employeeCode', ''))
+    if not person or person.get('activationStatus') != 'PHONE_PENDING' or not person.get('emailVerified'):
+        raise HTTPException(401, 'Invalid or expired phone activation session. Start activation again.')
+    ref = db.collection('email-activation').document(str(person['id']))
+    state = ref.get().to_dict() or {}
+    token_hash = digest(str(body.get('phoneVerificationToken', '')))
+    if (not state.get('phoneTokenHash') or not hmac.compare_digest(state['phoneTokenHash'], token_hash)
+            or state.get('phoneExpires', 0) < time.time()
+            or state.get('recipientHash') != recipient_hash(person)
+            or state.get('phoneHash') != digest('phone:' + normalize_phone(person.get('phone', '')))):
+        raise HTTPException(401, 'Invalid or expired phone activation session. Start activation again.')
+    return person, ref, state
+
+
+@router.post('/phone/send-otp')
+async def send_phone(body: dict):
+    from .recovery import phone_send
+    person, _, _ = phone_session(body)
+    # The destination always comes from the enrolled record, never from input.
+    result = await phone_send({'phone': person['phone']}, user=person)
+    result['data'] = {'maskedPhone': mask_phone(person['phone'])}
+    return result
+
+
+@router.post('/phone/verify-otp')
+async def verify_phone(body: dict):
+    from .recovery import phone_verify
+    person, ref, state = phone_session(body)
+    uid = str(person['id'])
+    challenge_ref = db.collection('phone-challenges').document(uid)
+    challenge = challenge_ref.get().to_dict() or {}
+    # A verified SMS may be retried after a transient account-enable failure.
+    completed = (person.get('phoneVerified') and challenge.get('state') == 'CONSUMED'
+                 and challenge.get('verifiedAt', 0) >= state.get('passwordSetAt', time.time()))
+    if not completed:
+        await phone_verify({'otp': body.get('otp', '')}, user=person | {'_activationSession': True})
+    employee_ref = db.collection('employees').document(uid)
+    enable_claim = secrets.token_hex(16)
+
+    @firestore.transactional
+    def claim_enable(tx):
+        session = ref.get(transaction=tx).to_dict() or {}
+        if (session.get('phoneTokenHash') != digest(str(body.get('phoneVerificationToken', '')))
+                or session.get('phoneExpires', 0) < time.time()
+                or session.get('enableBusyUntil', 0) > time.time()):
+            raise HTTPException(409, 'Activation is already completing. Wait and try logging in.')
+        tx.update(ref, {'enableClaim': enable_claim, 'enableBusyUntil': time.time() + 180})
+    transact(claim_enable)
+    try:
+        auth.update_user(uid, disabled=False)
+
+        @firestore.transactional
+        def finish(tx):
+            current = employee_ref.get(transaction=tx).to_dict() or {}
+            session = ref.get(transaction=tx).to_dict() or {}
+            verified = challenge_ref.get(transaction=tx).to_dict() or {}
+            if (session.get('enableClaim') != enable_claim
+                    or not current.get('active') or current.get('deleted') or not current.get('emailVerified')
+                    or not current.get('phoneVerified') or current.get('activationStatus') != 'PHONE_PENDING'
+                    or session.get('phoneTokenHash') != digest(str(body.get('phoneVerificationToken', '')))
+                    or session.get('phoneExpires', 0) < time.time()
+                    or session.get('recipientHash') != recipient_hash(current)
+                    or session.get('phoneHash') != digest('phone:' + normalize_phone(current.get('phone', '')))
+                    or verified.get('state') != 'CONSUMED'
+                    or verified.get('verifiedAt', 0) < session.get('passwordSetAt', time.time())
+                    or verified.get('phone') != normalize_phone(current.get('phone', ''))):
+                raise HTTPException(409, 'Activation details changed. Start activation again.')
+            tx.update(employee_ref, {'activationStatus': 'ACTIVE', 'permissionVersion': firestore.Increment(1)})
+            tx.update(ref, {'phoneTokenHash': None, 'phoneExpires': 0, 'enableBusyUntil': 0})
+        transact(finish)
+    except Exception as error:
+        if get('employees', uid).get('activationStatus') != 'ACTIVE':
+            auth.update_user(uid, disabled=True)
+        @firestore.transactional
+        def release(tx):
+            current = ref.get(transaction=tx).to_dict() or {}
+            if current.get('enableClaim') == enable_claim: tx.update(ref, {'enableBusyUntil': 0})
+        transact(release)
+        if isinstance(error, HTTPException): raise
+        raise HTTPException(502, 'Activation could not finish. Please retry phone verification.') from None
+    return {'success': True, 'data': None, 'message': 'Email and phone verified. Account activated. You can now log in.'}

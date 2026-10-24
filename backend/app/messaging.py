@@ -50,6 +50,12 @@ def recipient_allowed(channel, recipient):
     allowed=settings.approved_sms_recipients if channel=='msg91' else settings.approved_email_recipients
     values={v.strip().lower() for v in allowed.split(',') if v.strip()}
     enrolled = False
+    if channel == 'msg91' and enabled and settings.sms_registered_recipients_enabled:
+        from .store import rows
+        variants = ['+' + recipient, recipient]
+        if recipient.startswith('91') and len(recipient) == 12: variants.append(recipient[2:])
+        matches = rows('employees', [('phone', 'in', variants)], 2)
+        enrolled = len(matches)==1 and matches[0].get('active') and not matches[0].get('deleted')
     if channel in ('resend','zeptomail') and settings.email_registered_recipients_enabled and not recipient.lower().endswith(('.invalid', '@example.com')):
         from .store import rows
         matches = rows('employees',[('email',recipient.strip().lower())],2)

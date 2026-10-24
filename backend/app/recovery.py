@@ -28,7 +28,7 @@ def resolve(code):
 @router.post('/auth/forgot-password/send-otp')
 async def send_otp(body: dict):
     person=resolve(body.get('employeeCode',''))
-    if not person or person.get('activationStatus') == 'PENDING' or person.get('email','').strip().lower()!=str(body.get('email','')).strip().lower(): return {'success':True,'data':None,'message':GENERIC}
+    if not person or person.get('activationStatus') in ('PENDING', 'PHONE_PENDING') or person.get('email','').strip().lower()!=str(body.get('email','')).strip().lower(): return {'success':True,'data':None,'message':GENERIC}
     uid=str(person['id']);ref=db.collection('recovery').document(uid);otp='123456' if settings.environment=='local' else str(secrets.randbelow(900000)+100000);now=time.time()
     challenge=secrets.token_hex(16)
     @firestore.transactional
@@ -59,7 +59,7 @@ async def send_otp(body: dict):
 @router.post('/auth/forgot-password/verify-otp')
 def verify_otp(body: dict):
     person=resolve(body.get('employeeCode',''))
-    if not person or person.get('activationStatus') == 'PENDING' or person.get('email','').strip().lower()!=str(body.get('email','')).strip().lower(): raise HTTPException(401,'Invalid or expired verification code')
+    if not person or person.get('activationStatus') in ('PENDING', 'PHONE_PENDING') or person.get('email','').strip().lower()!=str(body.get('email','')).strip().lower(): raise HTTPException(401,'Invalid or expired verification code')
     uid=str(person['id']);ref=db.collection('recovery').document(uid);proof=secrets.token_urlsafe(32)
     @firestore.transactional
     def verify(tx):
@@ -161,11 +161,11 @@ async def phone_verify(body: dict,user=Depends(current_user)):
         if current.get('challengeId')!=row['challengeId'] or current.get('claim')!=claim_id or current.get('state')!='SENT': return False
         if current.get('expires',0)<time.time() or not person.get('active') or normalize_phone(person.get('phone',''))!=row['phone']: return False
         tx.update(employee,{'phoneVerified':True})
-        tx.update(ref,{'state':'CONSUMED','busyUntil':0})
+        tx.update(ref,{'state':'CONSUMED','busyUntil':0,'verifiedAt':time.time()})
         return True
     if not transact(consume): raise HTTPException(401,'Verification session changed; request another code')
     result={}
-    if settings.environment!='local': result['customToken']=auth.create_custom_token(uid).decode()
+    if settings.environment!='local' and not user.get('_activationSession'): result['customToken']=auth.create_custom_token(uid).decode()
     return {'success':True,'data':result,'message':'Phone verified'}
 
 

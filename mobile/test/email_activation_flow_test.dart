@@ -10,12 +10,13 @@ import 'package:frontend/features/auth/view/activate_account_screen.dart';
 import 'package:frontend/features/auth/view/create_password_screen.dart';
 import 'package:frontend/features/auth/view/login_screen.dart';
 import 'package:frontend/features/auth/view/phonenumber_verification_screen.dart';
+import 'package:frontend/features/auth/view/activation_phone_screen.dart';
 
 class EmailRepository extends AuthRepository {
   int sends=0,verifications=0,passwordSets=0;
   @override
   Future<ApiResult> sendActivationOtp(String employeeCode) async {
-    sends++;return ApiResult(success:true,message:'OTP sent to your registered email');
+    sends++;return ApiResult(success:true,message:'OTP sent to your registered email',data:{'maskedEmail':'t**t@example.com'});
   }
   @override
   Future<ApiResult> verifyActivationOtp(String employeeCode,String otp) async {
@@ -25,8 +26,13 @@ class EmailRepository extends AuthRepository {
   }
   @override
   Future<ApiResult> setPassword({required String employeeCode,required String signupToken,required String newPassword,required String confirmPassword}) async {
-    passwordSets++;return ApiResult(success:true,message:'Password set. Log in.');
+    passwordSets++;return ApiResult(success:true,message:'Password set. Verify phone.',data:{'phoneVerificationToken':'synthetic-phone-proof','maskedPhone':'+********3210'});
   }
+  @override
+  Future<ApiResult> sendActivationPhoneOtp(String employeeCode,String token) async => ApiResult(success:true,message:'Phone OTP sent');
+  @override
+  Future<ApiResult> verifyActivationPhoneOtp(String employeeCode,String token,String otp) async =>
+      ApiResult(success:otp=='123456',message:otp=='123456'?'Account activated':'Invalid phone OTP');
 }
 
 class EmailViewModel extends AuthViewModel {
@@ -36,7 +42,7 @@ class EmailViewModel extends AuthViewModel {
 }
 
 void main(){
-  testWidgets('employee code -> email OTP -> password -> login without temporary password or SMS',(tester) async {
+  testWidgets('employee code -> masked email OTP -> password -> enrolled phone OTP -> login',(tester) async {
     tester.view.physicalSize=const Size(480,1100);tester.view.devicePixelRatio=1;
     addTearDown(tester.view.resetPhysicalSize);addTearDown(tester.view.resetDevicePixelRatio);
     final repository=EmailRepository();
@@ -54,6 +60,7 @@ void main(){
     await tester.tap(find.text('Send OTP'));await tester.pumpAndSettle();
     expect(repository.sends,1);
     expect(find.text('Email OTP'),findsOneWidget);
+    expect(find.textContaining('t**t@example.com'),findsOneWidget);
     await tester.enterText(find.widgetWithText(TextFormField,'Email OTP'),'000000');
     await tester.tap(find.text('Verify OTP'));await tester.pumpAndSettle();
     expect(find.byType(CreatePasswordScreen),findsNothing);
@@ -64,6 +71,17 @@ void main(){
     await tester.enterText(find.widgetWithText(TextFormField,'Confirm Password'),'ValidPassword123!');
     await tester.ensureVisible(find.text('Continue'));await tester.tap(find.text('Continue'));await tester.pumpAndSettle();
     expect(repository.passwordSets,1);
+    expect(find.byType(LoginScreen),findsNothing);
+    expect(find.byType(ActivationPhoneScreen),findsOneWidget);
+    expect(find.textContaining('+********3210'),findsOneWidget);
+    await tester.tap(find.text('Send Phone OTP'));await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField,'Phone OTP'),'000000');
+    await tester.tap(find.text('Verify Phone OTP'));await tester.pumpAndSettle();
+    expect(find.byType(LoginScreen),findsNothing);
+    await tester.enterText(find.widgetWithText(TextFormField,'Phone OTP'),'123456');
+    await tester.tap(find.text('Verify Phone OTP'));await tester.pumpAndSettle();
+    expect(find.text('Account activated'),findsOneWidget);
+    await tester.tap(find.text('Go to Login'));await tester.pumpAndSettle();
     expect(find.byType(LoginScreen),findsOneWidget);
     expect(find.byType(PhoneNumberScreen),findsNothing);
     expect(tester.takeException(),isNull);

@@ -10,7 +10,7 @@ import '../widgets/auth_button.dart';
 import '../widgets/auth_header.dart';
 import '../widgets/auth_scaffold.dart';
 import '../widgets/auth_text_field.dart';
-import 'login_screen.dart';
+import 'activation_phone_screen.dart';
 
 class CreatePasswordScreen extends StatefulWidget {
   final String employeeCode;
@@ -72,7 +72,7 @@ class _CreatePasswordScreenState
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(
-          builder: (_) => const LoginScreen(),
+          builder: (_) => const ActivationPhoneScreen(),
         ),
         (_) => false,
       );

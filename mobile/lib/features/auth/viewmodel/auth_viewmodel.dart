@@ -26,6 +26,10 @@ class AuthViewModel extends ChangeNotifier {
     checkBiometricSupport();
   }
   SignupSession? _signupSession;
+  String? _activationPhoneToken;
+  String? _activationPhoneEmployeeCode;
+  String? _activationMaskedPhone;
+  String get activationMaskedPhone => _activationMaskedPhone ?? 'your enrolled phone';
   ResetPasswordSession? _resetPasswordSession;
   String? _employeeCode;
   bool _isLoading = false;
@@ -103,6 +107,9 @@ class AuthViewModel extends ChangeNotifier {
     if (_isLoading) return ApiResult(success: false, message: 'Please wait.');
     _setLoading(true);
     _signupSession = null;
+    _activationPhoneToken = null;
+    _activationPhoneEmployeeCode = null;
+    _activationMaskedPhone = null;
     try {
       return await _repository.sendActivationOtp(employeeCode);
     } finally { _setLoading(false); }
@@ -141,7 +148,16 @@ class AuthViewModel extends ChangeNotifier {
         newPassword: newPassword,
         confirmPassword: confirmPassword,
       );
-      if (result.success) _signupSession = null;
+      if (result.success) {
+        final data = result.data;
+        if (data is! Map || data['phoneVerificationToken'] is! String || (data['phoneVerificationToken'] as String).isEmpty) {
+          return ApiResult(success: false, message: 'Phone verification session unavailable. Start activation again.');
+        }
+        _activationPhoneToken = data['phoneVerificationToken'] as String;
+        _activationPhoneEmployeeCode = _signupSession!.employeeCode;
+        _activationMaskedPhone = data['maskedPhone'] as String?;
+        _signupSession = null;
+      }
       return result;
     } finally {
       _setLoading(false);
@@ -153,6 +169,24 @@ class AuthViewModel extends ChangeNotifier {
   /// the phone verification screen listens to this to drive its UI.
   Stream<PhoneVerificationEvent> get phoneVerificationEvents =>
       _phoneVerificationChannel.events;
+
+  Future<ApiResult> sendActivationPhoneOtp() => _activationPhoneRequest();
+  Future<ApiResult> verifyActivationPhoneOtp(String otp) => _activationPhoneRequest(otp: otp);
+
+  Future<ApiResult> _activationPhoneRequest({String? otp}) async {
+    if (_isLoading) return ApiResult(success: false, message: 'Please wait.');
+    final token = _activationPhoneToken, code = _activationPhoneEmployeeCode;
+    if (token == null || code == null) return ApiResult(success: false, message: 'Activation session expired. Start activation again.');
+    _setLoading(true);
+    try {
+      final result = otp == null ? await _repository.sendActivationPhoneOtp(code, token)
+          : await _repository.verifyActivationPhoneOtp(code, token, otp);
+      if (result.success && otp != null) {
+        _activationPhoneToken = null; _activationPhoneEmployeeCode = null; _activationMaskedPhone = null;
+      }
+      return result;
+    } finally { _setLoading(false); }
+  }
 
   /// Triggers Firebase to send an SMS code to [phoneNumber] (E.164 format, e.g. "+91..."). The
   /// outcome (code sent / auto-verified / failed) arrives on [phoneVerificationEvents].
