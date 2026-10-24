@@ -18,6 +18,7 @@ from google.api_core.exceptions import Aborted,AlreadyExists,ServiceUnavailable,
 
 from .config import settings
 from .models import EmployeeCreate
+from .employee_identity import save_identity
 from .security import current_user, manager, require
 from .store import db, get, rows, all_rows
 from .messaging import notify
@@ -114,22 +115,26 @@ def me(user=Depends(current_user)): return ok(user|{'userId':user['id']})
 def provision(body: EmployeeCreate, user=Depends(current_user)):
     manager(user)
     if body.role in ('CAPTAIN','PROJECT_CONTROLLER'): require(user,'CAPTAIN')
-    code = body.employeeCode.strip().upper()
     uid = str(secrets.randbelow(900000)+100000)
-    alias = code.lower()+'@accounts.crompton.invalid'
     password = body.password or 'Aa1!'+secrets.token_urlsafe(18)
+    record = body.model_dump(exclude={'password'}) | {'id':int(uid),'active':False,'provisioning':True,'deleted':False,'phoneVerified':False,'permissionVersion':1}
+    record = save_identity(uid, record, creating=True)
+    code = record['employeeCode']
+    alias = code.lower()+'@accounts.crompton.invalid'
+    created_auth = False
     try:
         auth.create_user(uid=uid,email=alias,password=password,display_name=body.name)
-    except (auth.EmailAlreadyExistsError,auth.UidAlreadyExistsError): raise HTTPException(409,'Employee code or identifier already exists; retry with a unique code') from None
-    record = body.model_dump(exclude={'password'}) | {'id':int(uid),'employeeCode':code,'active':True,'deleted':False,'phoneVerified':False,'permissionVersion':1}
-    record['email']=record['email'].strip().lower()
-    try:
-        db.collection('employees').document(uid).create(record)
+        created_auth = True
         auth.set_custom_user_claims(uid,{'role':body.role})
-    except Exception:
+        db.collection('employees').document(uid).update({'active':True,'provisioning':firestore.DELETE_FIELD})
+    except Exception as exc:
         db.collection('employees').document(uid).delete()
-        auth.delete_user(uid)
+        if created_auth: auth.delete_user(uid)
+        if isinstance(exc, (auth.EmailAlreadyExistsError,auth.UidAlreadyExistsError)):
+            raise HTTPException(409,'Employee code or identifier already exists; retry') from None
         raise
+    record['active'] = True
+    record.pop('provisioning', None)
     from .delivery import event
     event(int(uid),'invitation','employee-created-'+uid,code=code)
     return ok(record | {'temporaryPassword':password},'Employee created; deliver credentials through an approved channel')
@@ -151,7 +156,7 @@ def edit_employee(uid: str, body: dict, user=Depends(current_user)):
     if 'email' in changes:changes['email']=str(changes['email']).strip().lower()
     if 'phone' in changes and changes['phone']!=target.get('phone'):changes['phoneVerified']=False
     changes['permissionVersion']=firestore.Increment(1)
-    db.collection('employees').document(uid).update(changes)
+    save_identity(uid, changes, creating=False)
     if 'role' in changes: auth.set_custom_user_claims(uid,{'role':changes['role']})
     auth.revoke_refresh_tokens(uid)
     return ok(get('employees',uid))

@@ -1,0 +1,124 @@
+"""Identity invariants exercised against the local Firebase emulators."""
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
+from fastapi.testclient import TestClient
+from firebase_admin import auth
+
+from app.main import app
+from app.security import current_user
+from app.store import db
+
+
+@pytest.fixture
+def client(monkeypatch):
+    from app import delivery
+    from app.config import settings
+    assert settings.environment == 'local' and settings.project_id.startswith('demo-')
+    before = {s.id for s in db.collection('employees').stream()}
+    previous = app.dependency_overrides.copy()
+    app.dependency_overrides[current_user] = lambda: {'id': 1, 'role': 'CAPTAIN'}
+    monkeypatch.setattr(delivery, 'event', lambda *args, **kwargs: None)
+    yield TestClient(app)
+    app.dependency_overrides.clear()
+    app.dependency_overrides.update(previous)
+    for snapshot in db.collection('employees').stream():
+        if snapshot.id not in before:
+            snapshot.reference.delete()
+            try:
+                auth.delete_user(snapshot.id)
+            except auth.UserNotFoundError:
+                pass
+
+
+def payload(**changes):
+    return {'name': 'Identity regression', 'email': uuid.uuid4().hex + '@example.invalid',
+            'role': 'EMPLOYEE'} | changes
+
+
+def create(client, **changes):
+    response = client.post('/api/employees', json=payload(**changes))
+    assert response.status_code == 200, response.text
+    return response.json()['data']
+
+
+def test_auto_codes_follow_highest_existing_code_and_sort_numerically(client):
+    state = db.collection('counters').document('employee-identities').get().to_dict() or {}
+    legacy_code = f"EMP{state.get('sequence', 0) + 100:03d}"
+    legacy = create(client, employeeCode=legacy_code)
+    first = create(client)
+    second = create(client)
+    assert first['employeeCode'].startswith('EMP')
+    assert int(first['employeeCode'][3:]) == int(legacy_code[3:]) + 1
+    assert db.collection('employees').document(str(legacy['id'])).get().to_dict()['employeeCode'] == legacy_code
+    assert int(second['employeeCode'][3:]) == int(first['employeeCode'][3:]) + 1
+    assert client.post('/api/auth/login', json={
+        'employeeCode': first['employeeCode'], 'password': first['temporaryPassword']
+    }).status_code == 200
+
+
+@pytest.mark.parametrize('field,value,duplicate', [
+    ('employeeCode', 'UNIQUE_TEST', 'unique_test'),
+    ('email', 'Unique.Test@Example.invalid', '  UNIQUE.TEST@example.invalid  '),
+    ('phone', '9876543210', '+91 98765-43210'),
+])
+def test_duplicates_rejected_even_for_inactive_deleted_accounts(client, field, value, duplicate):
+    employee = create(client, **{field: value})
+    db.collection('employees').document(str(employee['id'])).update({'active': False, 'deleted': True})
+    response = client.post('/api/employees', json=payload(**{field: duplicate}))
+    assert response.status_code == 409, response.text
+    assert 'already in use' in response.json()['message']
+
+
+def test_edit_cannot_take_another_contact_but_can_keep_own(client):
+    first = create(client, phone='9876543211')
+    second = create(client, phone='9876543212')
+    for field in ('email', 'phone'):
+        response = client.put(f"/api/employees/{second['id']}", json={field: first[field]})
+        assert response.status_code == 409, response.text
+    assert client.put(f"/api/employees/{first['id']}", json={
+        'email': first['email'].upper(), 'phone': '9876543211'
+    }).status_code == 200
+
+
+def test_legacy_unformatted_contact_is_reserved(client):
+    first = create(client)
+    db.collection('employees').document(str(first['id'])).update({
+        'phone': '98765 43213', 'email': 'Legacy.Contact@Example.invalid'
+    })
+    assert client.post('/api/employees', json=payload(phone='+919876543213')).status_code == 409
+    assert client.post('/api/employees', json=payload(email='legacy.contact@example.invalid')).status_code == 409
+
+
+@pytest.mark.parametrize('identity', ['email', 'phone', 'employeeCode'])
+def test_concurrent_creates_cannot_share_contacts_or_code(client, identity):
+    values = {'email': 'race@example.invalid', 'phone': '9876543214', 'employeeCode': 'RACE_TEST'}
+    bodies = [payload(**{identity: values[identity]}), payload(**{identity: values[identity]})]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda body: client.post('/api/employees', json=body), bodies))
+    assert sorted(r.status_code for r in responses) == [200, 409]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: client.post('/api/employees', json=payload()), range(2)))
+    assert [r.status_code for r in responses] == [200, 200]
+    codes = sorted(int(r.json()['data']['employeeCode'][3:]) for r in responses)
+    assert codes[1] == codes[0] + 1
+
+
+def test_concurrent_edits_cannot_claim_same_phone(client):
+    employees = [create(client), create(client)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda e: client.put(
+            f"/api/employees/{e['id']}", json={'phone': '9876543215'}), employees))
+    assert sorted(r.status_code for r in responses) == [200, 409]
+
+
+def test_failed_auth_creation_releases_contacts(client, monkeypatch):
+    body = payload(phone='9876543216')
+    original = auth.create_user
+    def fail(**kwargs):
+        raise auth.EmailAlreadyExistsError('Simulated existing Auth alias', None, None)
+    monkeypatch.setattr(auth, 'create_user', fail)
+    assert client.post('/api/employees', json=body).status_code == 409
+    monkeypatch.setattr(auth, 'create_user', original)
+    assert client.post('/api/employees', json=body).status_code == 200
