@@ -3,8 +3,10 @@
 Current email activation uses Resend and sends OTPs directly from the API.
 Configure the hosted Resend key and sender separately from the local `.env`;
 see [email OTP setup](../docs/email-otp.md). Non-OTP transactional notifications
-now have an API background worker. The historical SMS setup below remains
-available for existing integrations but is not part of new email activation.
+now have an API background worker. New activation requires the enrolled-phone
+SMS OTP after password setup; login stays blocked until both contacts are
+verified. Use the existing MSG91 widget configuration below and enable
+`SMS_REGISTERED_RECIPIENTS_ENABLED` for enrolled-phone testing.
 
 Repository: https://github.com/Yogeshreddy07/comten, branch `main`.
 Current API: https://comten-production.up.railway.app, deployed 23 October 2026.
