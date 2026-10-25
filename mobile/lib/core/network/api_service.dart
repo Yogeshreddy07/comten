@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import '../../shared/constants/app_strings.dart';
 import '../constant/api_constants.dart';
 import '../services/session_manager.dart';
+import '../services/account_cache.dart';
 
 class ApiService {
   static final _firebase = FirebaseTransport();
@@ -72,6 +73,7 @@ class ApiService {
           body: jsonEncode(body),
         )
         .timeout(timeout ?? _timeout);
+    if (response.statusCode < 300) await AccountCache.instance.invalidateData();
     return _checkSession(response);
   }
 
@@ -128,6 +130,7 @@ class ApiService {
     final response = await _client
         .delete(Uri.parse('$baseUrl$endpoint'), headers: _buildHeaders(token))
         .timeout(_timeout);
+    if (response.statusCode < 300) await AccountCache.instance.invalidateData();
     return _checkSession(response);
   }
 }

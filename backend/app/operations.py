@@ -65,7 +65,7 @@ def update_module(mid: int,body: dict,user=Depends(current_user)):
     def update(tx):
         current=ref.get(transaction=tx).to_dict()
         if not current: raise HTTPException(404,'Module not found')
-        changes=validate_module(body,current)
+        changes=validate_module(body,current,transaction=tx)
         pending=[]
         if 'teamLeadId' in changes and changes['teamLeadId']!=current.get('teamLeadId'):
             # Read the query before writes so simultaneous submissions conflict

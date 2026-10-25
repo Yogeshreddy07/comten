@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 import os
 import secrets
+import hashlib
 import time
 from datetime import datetime, timezone, date
 from typing import Any
@@ -22,7 +23,7 @@ from .config import settings
 from .models import EmployeeCreate, EmployeeIdentityCheck
 from .employee_identity import save_identity, identity_conflicts
 from .security import current_user, manager, require
-from .store import db, get, rows, all_rows
+from .store import db, get, rows, all_rows, transact
 from .messaging import notify
 from .mobile_contracts import module_response,project_response
 from .roster import refresh_project_roster
@@ -224,14 +225,45 @@ def create_project(body: dict, user=Depends(current_user)):
     module=validate_module({k:v for k,v in body.items() if k in MODULE_FIELDS})
     members=module['memberIds']
     project={k:body.get(k) for k in ('projectCode','projectName','clientId')}
+    project['projectCode']=body['projectCode'].strip()
     project.update(id=pid,active=True,deleted=False,memberIds=members,createdAt=datetime.now(timezone.utc).isoformat())
-    module.update(id=mid,projectId=pid,projectCode=body['projectCode'],projectName=body['projectName'],active=True,deleted=False,status='IN_PROGRESS',workStage='WIP',memberIds=members,billingStatus=None)
-    batch=db.batch()
-    batch.create(db.collection('projects').document(str(pid)),project)
-    batch.create(db.collection('modules').document(str(mid)),module)
-    batch.commit()
-    refresh_project_roster(pid)
-    return ok(project_response(project))
+    module.update(id=mid,projectId=pid,projectCode=project['projectCode'],projectName=body['projectName'],active=True,deleted=False,status='IN_PROGRESS',workStage='WIP',memberIds=members,billingStatus=None)
+    # Hydrate the success payload before writing. A failed detail read must not
+    # turn an already committed project into a failed submission on the phone.
+    result=project_response(project, source=[module])
+    code=project['projectCode'].casefold()
+    reservation=db.collection('project-codes').document(hashlib.sha256(code.encode()).hexdigest())
+    @firestore.transactional
+    def create(tx):
+        if reservation.get(transaction=tx).exists:
+            raise HTTPException(409,'Project ID already exists. Enter a unique Project ID.')
+        # Legacy projects predate reservations. Projected reads also catch case
+        # and whitespace variants without loading assignment graphs.
+        for snapshot in db.collection('projects').select(['projectCode']).stream(transaction=tx):
+            if str(snapshot.to_dict().get('projectCode','')).strip().casefold()==code:
+                raise HTTPException(409,'Project ID already exists. Enter a unique Project ID.')
+        validate_module({k:v for k,v in body.items() if k in MODULE_FIELDS}, transaction=tx)
+        refresh_project_roster(pid, transaction=tx, project=project, module=module)
+        tx.create(reservation, {'projectId':pid,'projectCode':project['projectCode']})
+    transact(create)
+    return ok(result, 'Project created successfully')
+
+
+@app.delete('/api/activities/{key}')
+def delete_activity(key: int, user=Depends(current_user)):
+    manager(user)
+    ref=db.collection('activities').document(str(key))
+    @firestore.transactional
+    def remove(tx):
+        if not ref.get(transaction=tx).exists:
+            raise HTTPException(404,'Activity not found')
+        for field in ('billableActivityIds','nonBillableActivityIds'):
+            assigned=db.collection('modules').where(filter=FieldFilter(field,'array_contains',key))
+            if any(not s.to_dict().get('deleted') for s in assigned.stream(transaction=tx)):
+                raise HTTPException(409,'This activity is assigned to a project. Remove it from all project modules before deleting it.')
+        tx.update(ref, {'active':False})
+    transact(remove)
+    return ok(message='Activity deleted successfully')
 
 
 @app.post('/api/modules')
@@ -243,7 +275,11 @@ def create_module(body: dict, user=Depends(current_user)):
     record=validate_module({k:v for k,v in body.items() if k!='projectId'})
     mid=next_id()
     record.update(id=mid,projectId=project['id'],projectCode=project['projectCode'],projectName=project['projectName'],active=True,deleted=False,status='IN_PROGRESS',workStage='WIP',billingStatus=None)
-    db.collection('modules').document(str(mid)).create(record)
+    @firestore.transactional
+    def create(tx):
+        validate_module({k:v for k,v in body.items() if k!='projectId'}, transaction=tx)
+        tx.create(db.collection('modules').document(str(mid)),record)
+    transact(create)
     refresh_project_roster(project['id'])
     return ok(module_response(record))
 
@@ -323,7 +359,7 @@ def privileged_action(collection: str,key: str,action: str,body: dict,user=Depen
             if set(body)!={'workStage'} or body['workStage'] not in ('WIP','BILLING'): raise HTTPException(422,'Invalid work stage')
             parent=db.collection('projects').document(str(row['projectId'])).get(transaction=tx).to_dict()
             if not row.get('active') or row.get('deleted') or not parent or not parent.get('active') or parent.get('deleted'): raise HTTPException(409,'Module is inactive')
-            if row.get('status')=='COMPLETED' and body['workStage']=='WIP': raise HTTPException(409,'Completed modules cannot return to WIP')
+            if row.get('status')=='COMPLETED' and body['workStage']=='WIP': raise HTTPException(409,'This module is already completed and cannot be moved back to WIP.')
             changes={'workStage':body['workStage']}
         elif action in ('approve','reject'):
             require(user,'CAPTAIN')
@@ -418,6 +454,8 @@ def listing(collection: str,request: Request,user=Depends(current_user),limit: i
     if collection in ('employees','attendance','work-logs'): manager(user)
     if collection=='notifications': filters.append(('userId',user['id']))
     if collection=='activities': filters.append(('active',True))
+    if collection=='employees' and request.query_params.get('staffOnly')=='true':
+        filters.append(('role','in',['EMPLOYEE','TEAM_LEADER']))
     for k in ('role','moduleId','projectId','approvalStatus'):
         if k in request.query_params: filters.append((k,int(request.query_params[k]) if k.endswith('Id') else request.query_params[k]))
     if user['role'] not in ('CAPTAIN','PROJECT_CONTROLLER') and collection not in ('notifications','activities'):

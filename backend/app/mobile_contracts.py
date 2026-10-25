@@ -24,8 +24,9 @@ def module_response(row, records=None):
         if person:members.append({'userId':person['id'],'employeeCode':person['employeeCode'],'name':person['name']})
     return row|{'projectName':parent.get('projectName',row.get('projectName','')),'projectCode':parent.get('projectCode',row.get('projectCode','')),'teamLeadName':lead.get('name'),'members':members,'completedHours':row.get('completedHours',0),'completedMinutes':row.get('completedMinutes',0),'status':row.get('status','NOT_STARTED') if row.get('active',True) else 'INACTIVE',**{category+'Activities':[a for uid in row.get(category+'ActivityIds',[]) if (a:=lookup('activities',uid))] for category in ('billable','nonBillable')}}
 
-def project_response(row):
-    source=[m for m in all_rows('modules',[('projectId',row['id'])]) if not m.get('deleted')]
+def project_response(row, source=None):
+    if source is None:
+        source=[m for m in all_rows('modules',[('projectId',row['id'])]) if not m.get('deleted')]
     records=get_many([key for m in source for key in module_keys(m) if key[0]!='projects'], fields=SUMMARY_FIELDS)
     records[('projects', str(row['id']))]=row
     modules=[module_response(m, records) for m in source]

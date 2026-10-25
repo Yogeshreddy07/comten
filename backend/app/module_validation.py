@@ -8,7 +8,7 @@ MODULE_FIELDS={'moduleName','teamLeadId','startDate','endDate','estimatedMinutes
 STATUSES={'NOT_STARTED','IN_PROGRESS','ON_HOLD','COMPLETED'}
 WORK_STAGES={'YET_TO_START','WIP','BILLING'}
 
-def validate_module(body, existing=None):
+def validate_module(body, existing=None, *, transaction=None):
     if set(body)-MODULE_FIELDS: raise HTTPException(422,'Invalid module fields')
     merged=(existing or {})|body
     for key in ('moduleName','buildingClassification','structureClassification','remarks'):
@@ -32,7 +32,7 @@ def validate_module(body, existing=None):
     if merged.get('teamLeadId') is not None:
         if type(merged['teamLeadId']) is not int: raise HTTPException(422,'Select an active team leader')
         selections.append(('employees', merged['teamLeadId']))
-    records = get_many(selections, fields=['active', 'deleted', 'role'])
+    records = get_many(selections, fields=['active', 'deleted', 'role'], transaction=transaction)
     for key in ('memberIds','billableActivityIds','nonBillableActivityIds'):
         if key in body:
             for uid in body[key]:

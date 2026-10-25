@@ -15,9 +15,11 @@ class EmployeeApiService {
     return _apiService.post('/employees/validate-identity', body, token: token);
   }
 
+  /// The general management directory contains Employees and Team Leaders.
+  /// An explicit role preserves the separate Project Controller directory.
   Future<http.Response> getEmployees({String? token, String? role}) {
     if (role == null) {
-      return _apiService.get(ApiConstants.employees, token: token);
+      return _apiService.get('${ApiConstants.employees}?staffOnly=true', token: token);
     }
     final query = Uri(queryParameters: {'role': role}).query;
     return _apiService.get('${ApiConstants.employees}?$query', token: token);

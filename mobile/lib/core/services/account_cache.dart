@@ -10,8 +10,11 @@ class AccountCache {
   String? _uid;
   int? _version;
   DateTime? _lease;
+  int _revision = 0;
+  int get revision => _revision;
   Future<void> bind(String uid, int version, {bool renew=true}) async {
     if (_uid != uid || _version != version) {
+      _revision++;
       await _box?.close();
       _box = null;
       final name = 'snapshots_v1_${uid}_$version';
@@ -44,7 +47,8 @@ class AccountCache {
       return data is Map ? Map<String,dynamic>.from(data) : null;
     } catch(_) { return null; }
   }
-  Future<void> put(String key, dynamic value) async {
+  Future<void> put(String key, dynamic value, {int? revision}) async {
+    if (revision != null && revision != _revision) return;
     await _box?.put(key, jsonEncode({'schema':1,'created':DateTime.now().millisecondsSinceEpoch,'expires':DateTime.now().add(const Duration(minutes:15)).millisecondsSinceEpoch,'data':value}));
   }
   dynamic read(String key,{bool stale=true}) {
@@ -57,14 +61,17 @@ class AccountCache {
     } catch (_) { return null; }
   }
   Future<void> invalidateData() async {
+    _revision++;
     final profile=_box?.get('auth_profile');
     await _box?.clear();
     if(profile!=null) await _box?.put('auth_profile',profile);
   }
   Future<void> close() async {
+    _revision++;
     await _box?.close();_box=null;_uid=null;_version=null;_lease=null;
   }
   Future<void> clear({String? accountUid}) async {
+    _revision++;
     final uid=accountUid??_uid;
     await _box?.clear(); await _box?.close(); _box=null;
     if(uid != null) await _storage.delete(key:'hive_$uid');

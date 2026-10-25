@@ -339,6 +339,7 @@ class CreateProjectViewModel extends ChangeNotifier {
 
   // ---- Submission ----
   bool _isSubmitting = false;
+  bool _submitted = false;
   String? _submitError;
   ModuleSummary? _createdModule;
 
@@ -353,6 +354,8 @@ class CreateProjectViewModel extends ChangeNotifier {
       _isNewProject ? _clientId : (_existingProject?.clientId ?? '');
 
   Future<bool> submit() async {
+    if (_isSubmitting) return false;
+    if (_submitted) return true;
     _isSubmitting = true;
     _submitError = null;
     notifyListeners();
@@ -360,6 +363,7 @@ class CreateProjectViewModel extends ChangeNotifier {
     final result = _isNewProject ? await _submitNewProject() : await _submitToExistingProject();
 
     if (result.success) {
+      _submitted = true;
       _createdModule = result.data as ModuleSummary?;
     } else {
       _submitError = result.message;
@@ -398,12 +402,24 @@ class CreateProjectViewModel extends ChangeNotifier {
     // Reuse full details in the creation response. Older servers may still
     // return only a summary, in which case retain the detail-fetch fallback.
     final project = result.data as ProjectSummary?;
-    if (project == null || project.modules.isEmpty) return result;
+    if (project == null || project.modules.isEmpty) {
+      return ApiResult(success: true, message: result.message);
+    }
     if (project.moduleDetails.isNotEmpty) {
       return ApiResult(success: true, message: result.message,
           data: project.moduleDetails.first);
     }
-    return _moduleRepository.getModuleDetails(project.modules.first.id);
+    final details = await _moduleRepository.getModuleDetails(project.modules.first.id);
+    if (details.success) return details;
+    // Creation was acknowledged. A secondary display read must never invite
+    // the user to submit the same project again.
+    final module = project.modules.first;
+    return ApiResult(success: true, message: result.message, data: ModuleSummary(
+      id: module.id, projectId: project.id, projectCode: project.projectCode,
+      projectName: project.projectName, moduleName: module.moduleName,
+      status: module.status, startDate: module.startDate, endDate: module.endDate,
+      estimatedMinutes: module.estimatedMinutes,
+    ));
   }
 
   Future<ApiResult> _submitToExistingProject() {

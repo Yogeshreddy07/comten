@@ -1,6 +1,7 @@
 """Finite project lifecycle benchmark against the owned local emulator only."""
 import argparse
 import json
+import hashlib
 import os
 import statistics
 import sys
@@ -57,13 +58,14 @@ def main():
         batch.commit()
         for index in range(args.runs):
             project = request('create_project', 'POST', '/api/projects', json={
-                'projectCode': 'BENCH', 'projectName': 'Local benchmark',
+                'projectCode': f'BENCH-{base}-{index}', 'projectName': 'Local benchmark',
                 'moduleName': 'Design', 'teamLeadId': base,
                 'memberIds': list(range(base + 1, base + args.members + 1)),
                 'billableActivityIds': [1], 'nonBillableActivityIds': [2]})
             pid, mid = project['id'], project['modules'][0]['id']
             refs.extend([db.collection('projects').document(str(pid)),
-                         db.collection('modules').document(str(mid))])
+                         db.collection('modules').document(str(mid)),
+                         db.collection('project-codes').document(hashlib.sha256(project['projectCode'].casefold().encode()).hexdigest())])
             request('deactivate_project', 'DELETE', f'/api/projects/{pid}')
             request('activate_project', 'PUT', f'/api/projects/{pid}/activate', json={})
             request('activate_module', 'PUT', f'/api/modules/{mid}/activate', json={})

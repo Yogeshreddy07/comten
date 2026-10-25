@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frontend/features/auth/model/api_result.dart';
 import 'package:frontend/features/projects/model/project_list_item.dart';
@@ -49,19 +50,40 @@ class Modules extends ModuleRepository {
 }
 
 class Creation extends Projects {
+  int submissions = 0;
   @override
-  Future<ApiResult> submitProject(CreateProjectRequest request) async =>
-      ApiResult(success: true, message: '', data: ProjectSummary.fromJson({
+  Future<ApiResult> submitProject(CreateProjectRequest request) async {
+    submissions++;
+    return ApiResult(success: true, message: '', data: ProjectSummary.fromJson({
         'id': 1, 'projectName': 'Project', 'modules': [
           {'id': 10, 'projectId': 1, 'moduleName': 'Design',
             'members': [{'userId': 4, 'name': 'Employee'}],
             'billableActivities': [{'id': 1, 'name': 'Design', 'active': true}]}
         ]}));
+  }
+}
+
+class LegacyCreation extends Creation {
+  @override
+  Future<ApiResult> submitProject(CreateProjectRequest request) async =>
+      ApiResult(success: true, message: 'Created', data: ProjectSummary.fromJson({
+        'id': 1, 'modules': [{'id': 10, 'projectId': 1, 'moduleName': 'Design'}]}));
+}
+
+class UnavailableModules extends Modules {
+  @override
+  Future<ApiResult> getModuleDetails(int id) async =>
+      ApiResult(success: false, message: 'Unable to connect to server.');
 }
 
 class Activities extends ActivityRepository {
+  Completer<ApiResult>? pending;
+  bool blocked = false;
   @override
-  Future<ApiResult> getActivities() async => ApiResult(success: true, message: '', data: [
+  Future<ApiResult> deleteActivity(int id) async => ApiResult(
+    success: !blocked, message: blocked ? 'This activity is assigned to a project.' : 'Activity deleted successfully');
+  @override
+  Future<ApiResult> getActivities() async => pending != null ? pending!.future : ApiResult(success: true, message: '', data: [
     const Activity(id: 1, name: 'Active', active: true),
     const Activity(id: 2, name: 'Retired', active: false),
   ]);
@@ -69,6 +91,37 @@ class Activities extends ActivityRepository {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('failed display read after acknowledged creation still succeeds', () async {
+    final model = CreateProjectViewModel(projectRepository: LegacyCreation(), moduleRepository: UnavailableModules())
+      ..setNumberOfFloorsText('2')..setAreaText('500');
+    expect(await model.submit(), true);
+    expect(model.submitError, isNull);
+    expect(model.createdModule!.id, 10);
+    model.dispose();
+  });
+  test('late fetch cannot resurrect a confirmed activity deletion', () async {
+    final repository = Activities();
+    final model = ActivityViewModel(repository: repository);
+    await model.fetchActivities();
+    repository.pending = Completer<ApiResult>();
+    final refresh = model.fetchActivities();
+    expect(model.loadState, ActivityLoadState.success);
+    await model.deleteActivity(1);
+    repository.pending!.complete(ApiResult(success: true, message: '', data: [
+      const Activity(id: 1, name: 'Active', active: true)]));
+    await refresh;
+    expect(model.activities, isEmpty);
+    model.dispose();
+  });
+  test('assigned activity remains visible and shows server restriction', () async {
+    final model = ActivityViewModel(repository: Activities()..blocked = true);
+    await model.fetchActivities();
+    final result = await model.deleteActivity(1);
+    expect(result.success, false);
+    expect(result.message, contains('assigned to a project'));
+    expect(model.activities.single.id, 1);
+    model.dispose();
+  });
   test('confirmed deactivation reorders list without fetching every project', () async {
     final repository = Projects();
     final model = ProjectViewModel(repository: repository);
@@ -107,12 +160,15 @@ void main() {
   });
   test('creation uses returned members and activities without a second request', () async {
     final modules = Modules();
-    final model = CreateProjectViewModel(projectRepository: Creation(), moduleRepository: modules)
+    final projects = Creation();
+    final model = CreateProjectViewModel(projectRepository: projects, moduleRepository: modules)
       ..setNumberOfFloorsText('2')..setAreaText('500');
     expect(await model.submit(), true);
     expect(modules.reads, 0);
     expect(model.createdModule!.memberNames, ['Employee']);
     expect(model.createdModule!.billableActivities.single.name, 'Design');
+    expect(await model.submit(), true);
+    expect(projects.submissions, 1);
     model.dispose();
   });
 }

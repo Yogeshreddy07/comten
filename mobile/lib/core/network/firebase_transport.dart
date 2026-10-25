@@ -14,13 +14,13 @@ class FirebaseTransport {
   final db=FirebaseFirestore.instance;
   final auth=FirebaseAuth.instance;
   Map<String,dynamic>? _profile;
-  Future<List<QueryDocumentSnapshot<Map<String,dynamic>>>> pages(Query<Map<String,dynamic>> query,{bool singlePage=false}) async {
+  Future<List<QueryDocumentSnapshot<Map<String,dynamic>>>> pages(Query<Map<String,dynamic>> query,{bool singlePage=false, bool serverOnly=false}) async {
     final result=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
     QueryDocumentSnapshot<Map<String,dynamic>>? cursor;
     while(true) {
       var page=query.orderBy(FieldPath.documentId).limit(200);
       if(cursor!=null) page=page.startAfterDocument(cursor);
-      final snapshot=await page.get();result.addAll(snapshot.docs);
+      final snapshot=await page.get(serverOnly ? const GetOptions(source:Source.server) : const GetOptions());result.addAll(snapshot.docs);
       if(singlePage || snapshot.docs.length<200) return result;
       cursor=snapshot.docs.last;
     }
@@ -53,6 +53,7 @@ class FirebaseTransport {
     return data;
   }
   Future<http.Response?> request(String method,String endpoint,Map<String,dynamic> body) async {
+    final cacheRevision=AccountCache.instance.revision;
     final uri=Uri.parse(endpoint),parts=Uri.parse(endpoint).pathSegments;
     if(parts.isEmpty) return null;
     final collection=parts.first;
@@ -88,7 +89,8 @@ class FirebaseTransport {
       if(endpoint=='/employees/validate-identity') return null;
       // These writes are authorized by the backend. Avoid a redundant profile
       // round trip before sending the authenticated request.
-      if ((method == 'POST' && ['projects', 'modules'].contains(collection)) ||
+      if ((method == 'DELETE' && collection == 'activities') ||
+          (method == 'POST' && ['projects', 'modules'].contains(collection)) ||
           (method != 'GET' && ['projects', 'modules'].contains(collection) &&
               (method == 'DELETE' || parts.length > 2))) {
         await AccountCache.instance.invalidateData();
@@ -127,9 +129,6 @@ class FirebaseTransport {
       if(collection=='attendance') return await attendance(method,parts,body,p,uri);
       if(collection=='work-logs' && method=='POST' && parts.length==1) return await submitWorkLog(body,p);
       if(method!='GET') {
-        if(collection=='activities' && method=='DELETE') {
-          await db.collection(collection).doc(parts[1]).update({'active':false});return response(null);
-        }
         if(collection=='activities' && (method=='POST'||method=='PUT')) {
           final key=parts.length>1?parts[1]:DateTime.now().microsecondsSinceEpoch.toString();
           final row={'id':int.parse(key),'name':body['name'],'active':true};
@@ -157,24 +156,38 @@ class FirebaseTransport {
         final d=await db.collection(collection).doc(parts[1]).get();
         if(!d.exists) return response(null,status:404,message:'Record not found');
         final row=await decorate(collection,d.data()!);
-        await AccountCache.instance.put(endpoint,serial(row));return response(row);
+        await AccountCache.instance.put(endpoint,serial(row),revision:cacheRevision);return response(row);
       }
       Query<Map<String,dynamic>> query=db.collection(collection);
+      if(collection=='employees' && uri.queryParameters['staffOnly']=='true') {
+        query=query.where('role',whereIn:['EMPLOYEE','TEAM_LEADER']);
+      } else if(collection=='employees' && uri.queryParameters['role']!=null) {
+        query=query.where('role',isEqualTo:uri.queryParameters['role']);
+      }
       if(collection=='notifications') query=query.where('userId',isEqualTo:id);
       if(['projects','modules'].contains(collection)&&!manager) query=query.where('memberIds',arrayContains:id);
-      if(collection=='work-logs'&&!manager) query=query.where(parts.contains('my')?'employeeId':'teamLeadId',isEqualTo:id);
+      if(collection=='work-logs' && (parts.contains('my') || !manager)) query=query.where(parts.contains('my')?'employeeId':'teamLeadId',isEqualTo:id);
       if(collection.endsWith('requests')&&!manager) query=query.where('requestedById',isEqualTo:id);
       if(uri.queryParameters['after']!=null) {
         final cursor=await db.collection(collection).doc(uri.queryParameters['after']).get();
         if(cursor.exists) query=query.startAfterDocument(cursor);
       }
       // Single-field indexed query + bounded page; secondary UI filters apply to that page.
-      final documents=await pages(query,singlePage:uri.queryParameters['after']!=null);
+      final documents=await pages(query,singlePage:uri.queryParameters['after']!=null,serverOnly:['activities','work-logs'].contains(collection));
       var data=documents.map((d)=>d.data()).where((r)=>r['deleted']!=true).toList();
       if(collection=='activities') data=data.where((r)=>r['active']!=false).toList();
+      if(collection=='employees' && uri.queryParameters['staffOnly']=='true') {
+        data=data.where((r)=>['EMPLOYEE','TEAM_LEADER'].contains(r['role'])).toList();
+      }
       if(collection=='modules' && parts.contains('led')) data=data.where((r)=>r['teamLeadId']==id).toList();
       if(collection=='modules' && parts.contains('completed')) data=data.where((r)=>r['teamLeadId']==id && r['active']==true && (['NOT_STARTED','IN_PROGRESS','COMPLETED'].contains(r['status']) || r['workStage']=='BILLING')).toList();
       if(collection=='notifications') data.sort((a,b)=>b['createdAt'].toString().compareTo(a['createdAt'].toString()));
+      if(collection=='work-logs') {
+        data.sort((a,b) {
+          final byDate=b['workDate'].toString().compareTo(a['workDate'].toString());
+          return byDate!=0 ? byDate : serial(b['createdAt']).toString().compareTo(serial(a['createdAt']).toString());
+        });
+      }
       for(final entry in uri.queryParameters.entries) {
         if(['active','role','moduleId','employeeId','status','projectId'].contains(entry.key)) {
           final key=collection=='work-logs' && entry.key=='status'?'approvalStatus':entry.key;
@@ -193,7 +206,7 @@ class FirebaseTransport {
       if(collection=='projects' && uri.queryParameters['hasInProgressModule']=='true') {
         result=result.where((r)=>(r['modules'] as List).any((m)=>m['active']==true && m['status']=='IN_PROGRESS' && (m['memberIds'] as List).contains(id))).toList();
       }
-      await AccountCache.instance.put(endpoint,serial(result));return response(result);
+      await AccountCache.instance.put(endpoint,serial(result),revision:cacheRevision);return response(result);
     } on FirebaseAuthException catch(e) { return response(null,status:401,message:e.message??'Authentication failed'); }
       on TimeoutException { return response(null,status:503,message:'Firebase connection timed out'); }
       on FirebaseException catch(e) { return response(null,status:e.code=='permission-denied'?403:503,message:e.code=='permission-denied'?'Permission denied':'Firebase is unavailable'); }
@@ -311,9 +324,10 @@ class FirebaseTransport {
     }
     final row={'id':int.parse(key),'dayId':dayId,'dayTimestamp':Timestamp.fromDate(DateTime.utc(date.year,date.month,date.day)),'employeeId':p['id'],'employeeCode':p['employeeCode'],'employeeName':p['name'],'moduleId':m['id'],'moduleName':m['moduleName'],'projectId':m['projectId'],'projectCode':m['projectCode'],'projectName':m['projectName'],'teamLeadId':m['teamLeadId'],'workDate':body['workDate'],'workDone':body['workDone'],'billableDurationSeconds':bill,'nonBillableDurationSeconds':non,'billableActivityIds':billIds,'nonBillableActivityIds':nonIds,'billableActivities':activities['billable'],'nonBillableActivities':activities['nonBillable'],'approvalStatus':'PENDING','createdAt':FieldValue.serverTimestamp()};
     final ref=db.collection('work-logs').doc(key),ledger=db.collection('work-log-days').doc(dayId.toString());
+    Map<String,dynamic>? saved;
     await db.runTransaction((tx) async {
       final existing=await tx.get(ref);
-      if(existing.exists) return;
+      if(existing.exists) { saved=existing.data();return; }
       final previous=await tx.get(ledger);
       final attendance=await tx.get(db.collection('attendance').doc(dayId.toString()));
       if(!attendance.exists) throw StateError('Check in before logging hours');
@@ -325,9 +339,12 @@ class FirebaseTransport {
       // request.time boundary atomically instead of rejecting on an untrusted clock.
       if(a['outTime']!=null && total>elapsed) throw StateError('Timesheet hours exceed your attendance duration');
       tx.set(ref,row);
+      // Display the acknowledged write without a second network read.
+      saved={...row,'createdAt':Timestamp.now()};
       tx.set(ledger,{'employeeId':p['id'],'dayTimestamp':row['dayTimestamp'],'workDate':body['workDate'],'totalSeconds':total,'lastEntryId':key,'lastEntrySeconds':bill+non});
       tx.set(db.collection('notifications').doc(key),{'id':int.parse(key),'userId':m['teamLeadId'],'title':'Timesheet submitted','message':'${p['name']} submitted working hours for ${m['moduleName']}.','type':'TIMESHEET_SUBMITTED','moduleId':m['id'],'moduleName':m['moduleName'],'projectId':m['projectId'],'projectCode':m['projectCode'],'projectName':m['projectName'],'read':false,'pushPending':true,'createdAt':FieldValue.serverTimestamp()});
     });
-    return response((await ref.get()).data());
+    await AccountCache.instance.invalidateData();
+    return response(saved,message:'Timesheet submitted successfully');
   }
 }

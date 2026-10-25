@@ -13,6 +13,11 @@ void main(){
     final first=AccountCache();
     await first.bind('4',1);await first.put('auth_profile',{'employeeCode':'EMP001','permissionVersion':1});
     await first.put('/projects',[{'id':100,'projectName':'Synthetic'}]);
+    final revision=first.revision;
+    await first.invalidateData();
+    await first.put('/activities',[{'id':1}],revision:revision);
+    expect(first.read('/activities'),null);
+    await first.put('/projects',[{'id':100,'projectName':'Synthetic'}]);
     await first.close();
     final reopened=AccountCache();
     expect((await reopened.restoreProfile('4'))?['employeeCode'],'EMP001');

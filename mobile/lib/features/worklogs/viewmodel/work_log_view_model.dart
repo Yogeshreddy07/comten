@@ -22,6 +22,16 @@ class WorkLogViewModel extends ChangeNotifier {
   WorkLogLoadState _loadState = WorkLogLoadState.initial;
   List<WorkLog> _workLogs = [];
   String? _errorMessage;
+  int _revision = 0;
+  int _session = 0;
+
+  void _sort() {
+    _workLogs.sort((a, b) {
+      final byDate = b.workDate.compareTo(a.workDate);
+      if (byDate != 0) return byDate;
+      return (b.createdAt ?? b.workDate).compareTo(a.createdAt ?? a.workDate);
+    });
+  }
 
   WorkLogLoadState get loadState => _loadState;
   List<WorkLog> get workLogs => _workLogs;
@@ -30,6 +40,8 @@ class WorkLogViewModel extends ChangeNotifier {
   /// Clears this ViewModel's cached state on logout/new login so the next
   /// user never sees the previous user's data before their own fetch runs.
   void reset() {
+    _revision++;
+    _session++;
     _loadState = WorkLogLoadState.initial;
     _workLogs = [];
     _errorMessage = null;
@@ -39,7 +51,10 @@ class WorkLogViewModel extends ChangeNotifier {
   }
 
   Future<void> fetchMyWorkLogs({int? moduleId, String? status}) async {
-    _loadState = WorkLogLoadState.loading;
+    final revision = ++_revision;
+    if (_loadState != WorkLogLoadState.success) {
+      _loadState = WorkLogLoadState.loading;
+    }
     _errorMessage = null;
     notifyListeners();
 
@@ -47,9 +62,11 @@ class WorkLogViewModel extends ChangeNotifier {
       moduleId: moduleId,
       status: status,
     );
+    if (revision != _revision) return;
 
     if (result.success) {
-      _workLogs = (result.data as List<WorkLog>?) ?? [];
+      _workLogs = List<WorkLog>.of((result.data as List<WorkLog>?) ?? const []);
+      _sort();
       _loadState = WorkLogLoadState.success;
     } else {
       _errorMessage = result.message;
@@ -82,12 +99,20 @@ class WorkLogViewModel extends ChangeNotifier {
   bool get isSubmitting => _isSubmitting;
 
   Future<ApiResult> submitWorkLog(CreateWorkLogRequest request) async {
+    if (_isSubmitting) {
+      return ApiResult(success: false, message: 'Timesheet submission is already in progress.');
+    }
+    final session = _session;
     _isSubmitting = true;
     notifyListeners();
 
     final result = await _repository.submitWorkLog(request);
+    if (session != _session) return result;
 
     if (result.success) {
+      _revision++;
+      _loadState = WorkLogLoadState.success;
+      _errorMessage = null;
       final created = result.data as WorkLog?;
       // A resubmit within the backend's duplicate window (see
       // `WorkLogServiceImpl#submitWorkLog`) returns the SAME existing entry
@@ -96,6 +121,7 @@ class WorkLogViewModel extends ChangeNotifier {
       // though the database itself only ever has the one.
       if (created != null && !_workLogs.any((w) => w.id == created.id)) {
         _workLogs = [created, ..._workLogs];
+        _sort();
       }
     }
 

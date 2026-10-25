@@ -20,6 +20,12 @@ before(async()=>{
  });
 });
 after(async()=>{await env.cleanup()});
+test('activity deletion requires authoritative assignment checks',async()=>{
+ const db=env.authenticatedContext('12').firestore();
+ await assertSucceeds(setDoc(doc(db,'activities','700'),{id:700,name:'Unused',active:true}));
+ await assertFails(updateDoc(doc(db,'activities','700'),{active:false}));
+ await assertFails(setDoc(doc(db,'project-codes','reserved'),{projectId:200}));
+});
 test('pending email activation cannot access Firestore even with a token',async()=>{
  await env.withSecurityRulesDisabled(async c=>setDoc(doc(c.firestore(),'employees','16'),{id:16,role:'EMPLOYEE',active:true,activationStatus:'PENDING'}));
  const db=env.authenticatedContext('16').firestore();

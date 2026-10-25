@@ -21,7 +21,7 @@ import 'add_edit_employee_screen.dart';
 /// the backend's @PreAuthorize on `/api/employees/**`.
 ///
 /// Pass [roleFilter] to scope this same screen to a single role instead of
-/// the full staff directory - the Captain dashboard's "Project Controller
+/// the Employee/Team Leader directory - the Captain dashboard's "Project Controller
 /// Management" tile reuses this screen with `roleFilter:
 /// UserRole.projectManager` rather than duplicating it, and locks the new
 /// employee's role to match (see [AddEditEmployeeScreen.fixedRole]).
@@ -67,6 +67,9 @@ class _EmployeeListScreenState extends State<EmployeeListScreen> {
   }
 
   List<Employee> _filter(List<Employee> employees) {
+    employees = employees.where((employee) => widget.roleFilter != null
+        ? employee.role == widget.roleFilter
+        : [UserRole.employee, UserRole.teamLeader].contains(employee.role)).toList();
     final query = _query.trim().toLowerCase();
     if (query.isEmpty) return employees;
     return employees.where((employee) {
@@ -217,7 +220,7 @@ class _EmployeeListScreenState extends State<EmployeeListScreen> {
         );
 
       case EmployeeLoadState.success:
-        if (viewModel.employees.isEmpty) {
+        if (_query.trim().isEmpty && _filter(viewModel.employees).isEmpty) {
           return AppEmptyView(
             icon: Icons.people_outline,
             title: widget.emptyTitle ?? AppStrings.employeeListEmptyTitle,

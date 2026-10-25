@@ -18,6 +18,8 @@ class ActivityViewModel extends ChangeNotifier {
   ActivityLoadState _loadState = ActivityLoadState.initial;
   List<Activity> _activities = [];
   String? _errorMessage;
+  int _revision = 0;
+  final Set<int> _deleting = {};
 
   ActivityLoadState get loadState => _loadState;
   List<Activity> get activities => _activities;
@@ -26,6 +28,8 @@ class ActivityViewModel extends ChangeNotifier {
   /// Clears this ViewModel's cached state on logout/new login so the next
   /// user never sees the previous user's data before their own fetch runs.
   void reset() {
+    _revision++;
+    _deleting.clear();
     _loadState = ActivityLoadState.initial;
     _activities = [];
     _errorMessage = null;
@@ -34,11 +38,15 @@ class ActivityViewModel extends ChangeNotifier {
   }
 
   Future<void> fetchActivities() async {
-    _loadState = ActivityLoadState.loading;
+    final revision = ++_revision;
+    if (_loadState != ActivityLoadState.success) {
+      _loadState = ActivityLoadState.loading;
+    }
     _errorMessage = null;
     notifyListeners();
 
     final result = await _repository.getActivities();
+    if (revision != _revision) return;
 
     if (result.success) {
       _activities = ((result.data as List<Activity>?) ?? [])
@@ -62,6 +70,8 @@ class ActivityViewModel extends ChangeNotifier {
     final result = await _repository.createActivity(name);
 
     if (result.success) {
+      _revision++;
+      _loadState = ActivityLoadState.success;
       final created = result.data as Activity?;
       if (created != null) {
         _activities = [..._activities, created]
@@ -75,10 +85,16 @@ class ActivityViewModel extends ChangeNotifier {
   }
 
   Future<ApiResult> deleteActivity(int id) async {
+    if (!_deleting.add(id)) {
+      return ApiResult(success: false, message: 'Activity deletion is already in progress.');
+    }
     final result = await _repository.deleteActivity(id);
+    _deleting.remove(id);
 
     if (result.success) {
+      _revision++;
       _activities = _activities.where((activity) => activity.id != id).toList();
+      _loadState = ActivityLoadState.success;
       notifyListeners();
     }
 

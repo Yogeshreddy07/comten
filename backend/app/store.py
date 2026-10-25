@@ -21,10 +21,10 @@ def get(collection, key):
     return s.to_dict() if s.exists else None
 
 
-def get_many(keys, fields=None):
+def get_many(keys, fields=None, transaction=None):
     """Fetch distinct (collection, id) references in one database round trip."""
     refs = {db.collection(collection).document(str(key)) for collection, key in keys}
-    return {(s.reference.parent.id, s.id): s.to_dict() for s in db.get_all(refs, field_paths=fields)
+    return {(s.reference.parent.id, s.id): s.to_dict() for s in db.get_all(refs, field_paths=fields, transaction=transaction)
             if s.exists} if refs else {}
 
 

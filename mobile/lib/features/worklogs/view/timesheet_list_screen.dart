@@ -29,9 +29,7 @@ class _TimesheetListScreenState extends State<TimesheetListScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final viewModel = context.read<WorkLogViewModel>();
-      if (viewModel.loadState == WorkLogLoadState.initial) {
-        viewModel.fetchMyWorkLogs();
-      }
+      viewModel.fetchMyWorkLogs();
       _checkPendingReminder(context);
     });
   }
@@ -71,8 +69,9 @@ class _TimesheetListScreenState extends State<TimesheetListScreen> {
     if (!context.mounted) return;
     if (message != null) {
       SnackbarUtil.showSuccess(context, message);
+    } else {
+      context.read<WorkLogViewModel>().fetchMyWorkLogs();
     }
-    context.read<WorkLogViewModel>().fetchMyWorkLogs();
   }
 
   void _openDetails(BuildContext context, WorkLog workLog) {
