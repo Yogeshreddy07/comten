@@ -196,18 +196,17 @@ class ProjectViewModel extends ChangeNotifier {
     return result;
   }
 
-  /// Deactivates the project (backend sets `isActive` to false). The
-  /// Projects view is a single sorted list rather than separate tabs, so a
-  /// deactivated project doesn't disappear - it just re-sorts to the
-  /// bottom - hence a full refetch rather than a local splice.
+  /// Apply the confirmed server state without waiting for a full list reload.
+  /// A billing approval request leaves the project active.
   Future<ApiResult> deactivateProject(int id) async {
     _isDeactivating = true;
     notifyListeners();
 
     final result = await _repository.deactivateProject(id);
 
-    if (result.success) {
-      await fetchProjects();
+    if (result.success && result.data is Map &&
+        (result.data as Map)['active'] == false) {
+      _applyProjectState(id, active: false);
     }
 
     _isDeactivating = false;
@@ -226,12 +225,27 @@ class ProjectViewModel extends ChangeNotifier {
     final result = await _repository.activateProject(id);
 
     if (result.success) {
-      await fetchProjects();
+      _applyProjectState(id, active: true);
     }
 
     _isDeactivating = false;
     notifyListeners();
     return result;
+  }
+
+  void _applyProjectState(int id, {required bool active}) {
+    // Project activation keeps every child inactive.
+    _projects = _projects.map((p) => p.id == id
+        ? p.copyWith(isActive: active,
+            status: active ? 'NOT_STARTED' : 'INACTIVE', moduleCount: 0)
+        : p).toList();
+    _projects.sort((a, b) {
+      final priority = ProjectStatusX.fromApiValue(a.status).projectSortPriority
+          .compareTo(ProjectStatusX.fromApiValue(b.status).projectSortPriority);
+      return priority != 0 ? priority
+          : a.projectName.toLowerCase().compareTo(b.projectName.toLowerCase());
+    });
+    _workLogProjects = _workLogProjects.where((p) => p.id != id).toList();
   }
 
   /// Soft-deletes the project (backend sets `isDeleted` to true; the row

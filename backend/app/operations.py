@@ -85,11 +85,12 @@ def update_module(mid: int,body: dict,user=Depends(current_user)):
 def deactivate(key: str,request: Request,user=Depends(current_user)):
     manager(user)
     collection=request.url.path.split('/')[2]
-    if not get(collection,key): raise HTTPException(404,'Record not found')
+    record=get(collection,key)
+    if not record: raise HTTPException(404,'Record not found')
     if collection=='projects' and user['role']=='PROJECT_CONTROLLER':
         modules=list(all_rows('modules',[('projectId',int(key))]))
         if any(m.get('workStage')=='BILLING' for m in modules):
-            p=get(collection,key);request_id=int(datetime.now(timezone.utc).timestamp()*1000000)
+            p=record;request_id=int(datetime.now(timezone.utc).timestamp()*1000000)
             db.collection('project-deactivation-requests').document(str(request_id)).create({'id':request_id,'projectId':p['id'],'projectName':p['projectName'],'projectCode':p['projectCode'],'requestedById':user['id'],'requestedByName':user['name'],'approvalStatus':'PENDING','status':'PENDING','createdAt':datetime.now(timezone.utc).isoformat()})
             return {'success':True,'message':'Deactivation submitted for Captain approval','data':p}
     ref=db.collection(collection).document(key)
@@ -99,9 +100,8 @@ def deactivate(key: str,request: Request,user=Depends(current_user)):
         tx.update(ref,{'active':False})
         for child in children: tx.update(child.reference,{'active':False})
     disable(db.transaction())
-    row=get(collection,key)
-    refresh_project_roster(row['projectId'] if collection=='modules' else row['id'])
-    return {'success':True,'message':'Deactivated','data':get(collection,key)}
+    refresh_project_roster(record['projectId'] if collection=='modules' else record['id'])
+    return {'success':True,'message':'Deactivated','data':record|{'active':False}}
 
 
 @router.post('/notifications/delay-requests')

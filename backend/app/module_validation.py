@@ -2,7 +2,7 @@
 from datetime import date
 from math import isfinite
 from fastapi import HTTPException
-from .store import get
+from .store import get_many
 
 MODULE_FIELDS={'moduleName','teamLeadId','startDate','endDate','estimatedMinutes','memberIds','billableActivityIds','nonBillableActivityIds','buildingClassification','structureClassification','numberOfFloors','area','remarks','status'}
 STATUSES={'NOT_STARTED','IN_PROGRESS','ON_HOLD','COMPLETED'}
@@ -23,15 +23,25 @@ def validate_module(body, existing=None):
         end=date.fromisoformat(merged['endDate']) if merged.get('endDate') else None
         if start and end and end<start: raise ValueError()
     except (ValueError,TypeError): raise HTTPException(422,'Invalid module dates') from None
+    selections = []
     for key in ('memberIds','billableActivityIds','nonBillableActivityIds'):
         if key in body:
             value=body[key]
             if not isinstance(value,list) or len(value)>100 or any(type(i) is not int for i in value): raise HTTPException(422,'Invalid selection')
-            for uid in value:
-                record=get('employees' if key=='memberIds' else 'activities',uid)
-                if not record or not record.get('active',True) or record.get('deleted'): raise HTTPException(422,'Selection is unavailable')
+            selections.extend(('employees' if key=='memberIds' else 'activities', uid) for uid in value)
     if merged.get('teamLeadId') is not None:
-        lead=get('employees',merged['teamLeadId'])
+        if type(merged['teamLeadId']) is not int: raise HTTPException(422,'Select an active team leader')
+        selections.append(('employees', merged['teamLeadId']))
+    records = get_many(selections, fields=['active', 'deleted', 'role'])
+    for key in ('memberIds','billableActivityIds','nonBillableActivityIds'):
+        if key in body:
+            for uid in body[key]:
+                record=records.get(('employees' if key=='memberIds' else 'activities',str(uid)))
+                if not record or not record.get('active',True) or record.get('deleted'):
+                    label = 'Employee' if key == 'memberIds' else 'Activity'
+                    raise HTTPException(422,f'{label} selection is unavailable. Refresh the form and select an active {label.lower()}.')
+    if merged.get('teamLeadId') is not None:
+        lead=records.get(('employees',str(merged['teamLeadId'])))
         if type(merged['teamLeadId']) is not int or not lead or not lead.get('active') or lead['role']!='TEAM_LEADER': raise HTTPException(422,'Select an active team leader')
     changes=dict(body)
     if not existing or 'memberIds' in body or 'teamLeadId' in body:

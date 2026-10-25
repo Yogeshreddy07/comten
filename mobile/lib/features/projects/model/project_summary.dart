@@ -1,4 +1,5 @@
 import '../../modules/model/module_list_item.dart';
+import '../../modules/model/module_summary.dart';
 
 /// Full project detail - mirrors the backend's `ProjectResponse` (see
 /// `POST /api/projects`, `GET /api/projects/{id}`). A project itself only
@@ -31,6 +32,8 @@ class ProjectSummary {
   final int? pendingMinutes;
 
   final List<ModuleListItem> modules;
+  /// Creation responses already include full module details for the success view.
+  final List<ModuleSummary> moduleDetails;
 
   const ProjectSummary({
     required this.id,
@@ -45,6 +48,7 @@ class ProjectSummary {
     this.workedMinutes,
     this.pendingMinutes,
     this.modules = const [],
+    this.moduleDetails = const [],
   });
 
   factory ProjectSummary.fromJson(Map<String, dynamic> json) {
@@ -68,6 +72,8 @@ class ProjectSummary {
       modules: rawModules
           .map((m) => ModuleListItem.fromJson(m as Map<String, dynamic>))
           .toList(),
+      moduleDetails: rawModules.where((m) => (m as Map).containsKey('members'))
+          .map((m) => ModuleSummary.fromJson(m as Map<String, dynamic>)).toList(),
     );
   }
 }

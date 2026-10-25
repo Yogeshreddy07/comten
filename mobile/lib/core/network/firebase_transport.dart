@@ -86,6 +86,14 @@ class FirebaseTransport {
       if(collection=='auth') return null;
       // Contact validation is authoritative, read-only backend work.
       if(endpoint=='/employees/validate-identity') return null;
+      // These writes are authorized by the backend. Avoid a redundant profile
+      // round trip before sending the authenticated request.
+      if ((method == 'POST' && ['projects', 'modules'].contains(collection)) ||
+          (method != 'GET' && ['projects', 'modules'].contains(collection) &&
+              (method == 'DELETE' || parts.length > 2))) {
+        await AccountCache.instance.invalidateData();
+        return null;
+      }
       Map<String,dynamic> p;
       try { p=await profile(); }
       on Exception catch(e) {
@@ -163,6 +171,7 @@ class FirebaseTransport {
       // Single-field indexed query + bounded page; secondary UI filters apply to that page.
       final documents=await pages(query,singlePage:uri.queryParameters['after']!=null);
       var data=documents.map((d)=>d.data()).where((r)=>r['deleted']!=true).toList();
+      if(collection=='activities') data=data.where((r)=>r['active']!=false).toList();
       if(collection=='modules' && parts.contains('led')) data=data.where((r)=>r['teamLeadId']==id).toList();
       if(collection=='modules' && parts.contains('completed')) data=data.where((r)=>r['teamLeadId']==id && r['active']==true && (['NOT_STARTED','IN_PROGRESS','COMPLETED'].contains(r['status']) || r['workStage']=='BILLING')).toList();
       if(collection=='notifications') data.sort((a,b)=>b['createdAt'].toString().compareTo(a['createdAt'].toString()));
@@ -180,7 +189,7 @@ class FirebaseTransport {
       // lead's peer roster, and can deny the entire picker unnecessarily.
       final ledPicker=collection=='modules' && parts.contains('led');
       if(ledPicker) data=data.where((r)=>r['active']==true).toList();
-      var result=ledPicker ? data : await Future.wait(data.map((r)=>decorate(collection,r)));
+      var result=ledPicker ? data : await Future.wait(data.map((r)=>decorate(collection,r,summaryOnly:true)));
       if(collection=='projects' && uri.queryParameters['hasInProgressModule']=='true') {
         result=result.where((r)=>(r['modules'] as List).any((m)=>m['active']==true && m['status']=='IN_PROGRESS' && (m['memberIds'] as List).contains(id))).toList();
       }
@@ -190,7 +199,7 @@ class FirebaseTransport {
       on FirebaseException catch(e) { return response(null,status:e.code=='permission-denied'?403:503,message:e.code=='permission-denied'?'Permission denied':'Firebase is unavailable'); }
       on StateError catch(e) { return response(null,status:409,message:e.message); }
   }
-  Future<Map<String,dynamic>> decorate(String collection,Map<String,dynamic> row) async {
+  Future<Map<String,dynamic>> decorate(String collection,Map<String,dynamic> row,{bool summaryOnly=false}) async {
     final result={...row,'isActive':row['active']??true};
     if(collection=='projects') {
       Query<Map<String,dynamic>> q=db.collection('modules').where('projectId',isEqualTo:row['id']);
@@ -198,7 +207,7 @@ class FirebaseTransport {
       final modules=await pages(q);
       final visible=modules.map((d)=>d.data()).where((m)=>m['deleted']!=true).toList();
       final current=visible.where((m)=>m['active']!=false).toList();
-      result['modules']=await Future.wait(visible.map((m)=>decorate('modules',m)));
+      result['modules']=await Future.wait(visible.map((m)=>decorate('modules',m,summaryOnly:true)));
       result['moduleCount']=current.length;
       final states=current.map((m)=>m['status']).toSet();
       result['status']=row['active']==false?'INACTIVE':states.isEmpty?'NOT_STARTED':states.length==1?states.first:'IN_PROGRESS';
@@ -213,21 +222,31 @@ class FirebaseTransport {
       if(row['active']==false) result['status']='INACTIVE';
       result['completedHours']=row['completedHours']??0;
       result['completedMinutes']=row['completedMinutes']??0;
-      final members=<Map<String,dynamic>>[];
-      for(final id in (row['memberIds'] as List? ?? [])) {
-        final e=await db.collection('employees').doc(id.toString()).get();
-        if(e.exists) members.add({...e.data()!,'userId':e.data()!['id']});
+      // Lists display names/status only. Load the full assignment graph for
+      // module details, with independent document reads running together.
+      final reads=<String,Future<DocumentSnapshot<Map<String,dynamic>>>>{};
+      void read(String collection,dynamic id) {
+        final path='$collection/$id';
+        reads.putIfAbsent(path,()=>db.doc(path).get());
       }
-      result['members']=members;
-      for(final category in ['billable','nonBillable']) {
-        final activities=<Map<String,dynamic>>[];
-        for(final id in (row['${category}ActivityIds'] as List? ?? [])) {
-          final a=(await db.collection('activities').doc(id.toString()).get()).data();
-          if(a!=null) activities.add(a);
+      if(row['teamLeadId']!=null) read('employees',row['teamLeadId']);
+      if(!summaryOnly) {
+        for(final id in (row['memberIds'] as List? ?? [])) { read('employees',id); }
+        for(final category in ['billable','nonBillable']) {
+          for(final id in (row['${category}ActivityIds'] as List? ?? [])) { read('activities',id); }
         }
-        result['${category}Activities']=activities;
       }
-      if(row['teamLeadId']!=null) result['teamLeadName']=(await db.collection('employees').doc(row['teamLeadId'].toString()).get()).data()?['name'];
+      final docs=await Future.wait(reads.values);
+      final records={for(final doc in docs) doc.reference.path:doc.data()};
+      if(row['teamLeadId']!=null) result['teamLeadName']=records['employees/${row['teamLeadId']}']?['name'];
+      if(!summaryOnly) {
+        result['members']=[for(final id in (row['memberIds'] as List? ?? []))
+          if(records['employees/$id']!=null) {...records['employees/$id']!,'userId':id}];
+        for(final category in ['billable','nonBillable']) {
+          result['${category}Activities']=[for(final id in (row['${category}ActivityIds'] as List? ?? []))
+            if(records['activities/$id']!=null) records['activities/$id']!];
+        }
+      }
     }
     return result;
   }

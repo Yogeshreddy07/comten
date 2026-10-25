@@ -132,15 +132,20 @@ class ModuleViewModel extends ChangeNotifier {
     return result;
   }
 
-  /// Reactivates a previously deactivated module, restoring the status it
-  /// had before deactivation. The restored value is server-side logic
-  /// (`previous_status`), so the caller should refetch details afterward
-  /// (via [fetchModuleDetails]) rather than relying on any local patch here.
+  /// Reflect the lifecycle status returned by the server immediately.
   Future<ApiResult> activateModule(int id) async {
     _isDeactivating = true;
     notifyListeners();
 
     final result = await _repository.activateModule(id);
+
+    if (result.success && result.data is Map) {
+      final status = (result.data as Map)['status'] as String? ?? 'NOT_STARTED';
+      _modules = _modules.map((m) => m.id == id ? m.copyWith(status: status) : m).toList();
+      if (_selectedModule?.id == id) {
+        _selectedModule = _selectedModule!.copyWith(status: status);
+      }
+    }
 
     _isDeactivating = false;
     notifyListeners();

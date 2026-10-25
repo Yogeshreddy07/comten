@@ -354,7 +354,8 @@ def privileged_action(collection: str,key: str,action: str,body: dict,user=Depen
         for child in children: tx.update(child.reference,{'active':False})
         return row|changes
     result=mutate(db.transaction())
-    if collection in ('projects','modules'): refresh_project_roster(result['id'] if collection=='projects' else result['projectId'])
+    if collection in ('projects','modules') and action in ('activate','delete'):
+        refresh_project_roster(result['id'] if collection=='projects' else result['projectId'])
     if collection=='project-deactivation-requests' and action=='approve': refresh_project_roster(result['projectId'])
     if collection in ('module-change-requests','billing-status-change-requests') and action in ('approve','reject'):
         kind=('PROJECT_CHANGE_' if collection=='module-change-requests' else 'BILLING_REVERSION_')+('APPROVED' if action=='approve' else 'REJECTED')
@@ -416,6 +417,7 @@ def listing(collection: str,request: Request,user=Depends(current_user),limit: i
     filters=[]
     if collection in ('employees','attendance','work-logs'): manager(user)
     if collection=='notifications': filters.append(('userId',user['id']))
+    if collection=='activities': filters.append(('active',True))
     for k in ('role','moduleId','projectId','approvalStatus'):
         if k in request.query_params: filters.append((k,int(request.query_params[k]) if k.endswith('Id') else request.query_params[k]))
     if user['role'] not in ('CAPTAIN','PROJECT_CONTROLLER') and collection not in ('notifications','activities'):

@@ -10,6 +10,7 @@ import '../services/session_manager.dart';
 
 class ApiService {
   static final _firebase = FirebaseTransport();
+  static final http.Client _client = http.Client();
   static String get baseUrl => ApiConstants.baseUrl;
 
   static const _timeout = Duration(seconds: ApiConstants.requestTimeoutSeconds);
@@ -64,7 +65,7 @@ class ApiService {
     final direct = await _firebase.request('POST', endpoint, body);
     if (direct != null) return direct;
     token = await FirebaseAuth.instance.currentUser?.getIdToken();
-    final response = await http
+    final response = await _client
         .post(
           Uri.parse('$baseUrl$endpoint'),
           headers: _buildHeaders(token),
@@ -96,9 +97,9 @@ class ApiService {
     final uri = Uri.parse('$baseUrl$endpoint');
     final headers = _buildHeaders(token);
     try {
-      return await http.get(uri, headers: headers).timeout(_timeout);
+      return await _client.get(uri, headers: headers).timeout(_timeout);
     } catch (_) {
-      return await http.get(uri, headers: headers).timeout(_timeout);
+      return await _client.get(uri, headers: headers).timeout(_timeout);
     }
   }
 
@@ -110,7 +111,7 @@ class ApiService {
     final direct = await _firebase.request('PUT', endpoint, body);
     if (direct != null) return direct;
     token = await FirebaseAuth.instance.currentUser?.getIdToken();
-    final response = await http
+    final response = await _client
         .put(
           Uri.parse('$baseUrl$endpoint'),
           headers: _buildHeaders(token),
@@ -124,7 +125,7 @@ class ApiService {
     final direct = await _firebase.request('DELETE', endpoint, const {});
     if (direct != null) return direct;
     token = await FirebaseAuth.instance.currentUser?.getIdToken();
-    final response = await http
+    final response = await _client
         .delete(Uri.parse('$baseUrl$endpoint'), headers: _buildHeaders(token))
         .timeout(_timeout);
     return _checkSession(response);

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../../core/services/push_notification_service.dart';
 import '../../../core/utils/snackbar_util.dart';
 import '../../../shared/constants/app_dimensions.dart';
+import '../../../shared/widgets/gradient_spinner.dart';
 import '../../../shared/widgets/pin_dots_indicator.dart';
 import '../../../shared/widgets/theme_toggle_button.dart';
 import '../../dashboard/utils/role_dashboard_navigator.dart';
@@ -278,13 +279,31 @@ class _AppLockScreenState extends State<AppLockScreen> {
                           ],
                         ),
                       ),
-                      if (_isLoading)
-                        const SizedBox(
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      else
-                        const SizedBox(height: 20),
+                      // Fixed-height slot so the keypad never shifts when the
+                      // spinner appears; it fades/scales in rather than popping.
+                      SizedBox(
+                        height: 56,
+                        child: Center(
+                          child: AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 250),
+                            switchInCurve: Curves.easeOutCubic,
+                            switchOutCurve: Curves.easeIn,
+                            transitionBuilder: (child, animation) =>
+                                FadeTransition(
+                              opacity: animation,
+                              child: ScaleTransition(
+                                scale: animation,
+                                child: child,
+                              ),
+                            ),
+                            child: _isLoading
+                                ? const GradientSpinner(
+                                    key: ValueKey('spinner'),
+                                  )
+                                : const SizedBox.shrink(),
+                          ),
+                        ),
+                      ),
 
                       const Spacer(),
 

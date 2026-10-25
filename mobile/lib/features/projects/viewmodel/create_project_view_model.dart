@@ -395,12 +395,14 @@ class CreateProjectViewModel extends ChangeNotifier {
     final result = await _projectRepository.submitProject(request);
     if (!result.success) return result;
 
-    // The combined create-project response nests the new module as a
-    // lighter `ModuleListItem` (no members) - fetch the full detail so the
-    // Success screen can show Employees too, same as the existing-project
-    // path already gets from `ModuleRepository.createModule`.
+    // Reuse full details in the creation response. Older servers may still
+    // return only a summary, in which case retain the detail-fetch fallback.
     final project = result.data as ProjectSummary?;
     if (project == null || project.modules.isEmpty) return result;
+    if (project.moduleDetails.isNotEmpty) {
+      return ApiResult(success: true, message: result.message,
+          data: project.moduleDetails.first);
+    }
     return _moduleRepository.getModuleDetails(project.modules.first.id);
   }
 

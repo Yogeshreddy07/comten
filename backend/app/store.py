@@ -21,6 +21,13 @@ def get(collection, key):
     return s.to_dict() if s.exists else None
 
 
+def get_many(keys, fields=None):
+    """Fetch distinct (collection, id) references in one database round trip."""
+    refs = {db.collection(collection).document(str(key)) for collection, key in keys}
+    return {(s.reference.parent.id, s.id): s.to_dict() for s in db.get_all(refs, field_paths=fields)
+            if s.exists} if refs else {}
+
+
 def rows(collection, filters=(), limit=200, after=None):
     q = db.collection(collection)
     for entry in filters:
@@ -39,6 +46,8 @@ def all_rows(collection, filters=()):
         if not batch:
             break
         yield from batch
+        if len(batch) < 200:
+            break
         after = str(batch[-1]['id'])
 
 

@@ -1,17 +1,34 @@
 """Response-only enrichment for the existing Flutter success and edit screens."""
-from .store import get,all_rows
+from .store import get_many,all_rows
 
-def module_response(row):
-    parent=get('projects',row['projectId']) or {}
-    lead=get('employees',row.get('teamLeadId')) or {}
+SUMMARY_FIELDS = ['id', 'employeeCode', 'name', 'active', 'projectName', 'projectCode']
+
+def module_keys(row):
+    return [('projects', row['projectId'])] + [
+        ('employees', uid) for uid in set(row.get('memberIds', [])) | (
+            {row['teamLeadId']} if row.get('teamLeadId') is not None else set())] + [
+        ('activities', uid) for category in ('billable', 'nonBillable')
+        for uid in row.get(category + 'ActivityIds', [])]
+
+
+def module_response(row, records=None):
+    if records is None:
+        records = get_many(module_keys(row), fields=SUMMARY_FIELDS)
+    def lookup(collection, key):
+        return records.get((collection, str(key)))
+    parent=lookup('projects',row['projectId']) or {}
+    lead=lookup('employees',row.get('teamLeadId')) or {}
     members=[]
     for uid in row.get('memberIds',[]):
-        person=get('employees',uid)
+        person=lookup('employees',uid)
         if person:members.append({'userId':person['id'],'employeeCode':person['employeeCode'],'name':person['name']})
-    return row|{'projectName':parent.get('projectName',row.get('projectName','')),'projectCode':parent.get('projectCode',row.get('projectCode','')),'teamLeadName':lead.get('name'),'members':members,'completedHours':row.get('completedHours',0),'completedMinutes':row.get('completedMinutes',0),'status':row.get('status','NOT_STARTED') if row.get('active',True) else 'INACTIVE',**{category+'Activities':[a for uid in row.get(category+'ActivityIds',[]) if (a:=get('activities',uid))] for category in ('billable','nonBillable')}}
+    return row|{'projectName':parent.get('projectName',row.get('projectName','')),'projectCode':parent.get('projectCode',row.get('projectCode','')),'teamLeadName':lead.get('name'),'members':members,'completedHours':row.get('completedHours',0),'completedMinutes':row.get('completedMinutes',0),'status':row.get('status','NOT_STARTED') if row.get('active',True) else 'INACTIVE',**{category+'Activities':[a for uid in row.get(category+'ActivityIds',[]) if (a:=lookup('activities',uid))] for category in ('billable','nonBillable')}}
 
 def project_response(row):
-    modules=[module_response(m) for m in all_rows('modules',[('projectId',row['id'])]) if not m.get('deleted')]
+    source=[m for m in all_rows('modules',[('projectId',row['id'])]) if not m.get('deleted')]
+    records=get_many([key for m in source for key in module_keys(m) if key[0]!='projects'], fields=SUMMARY_FIELDS)
+    records[('projects', str(row['id']))]=row
+    modules=[module_response(m, records) for m in source]
     active=[m for m in modules if m.get('active',True)]
     states={m['status'] for m in active}
     estimate=sum(m.get('estimatedMinutes') or 0 for m in active)

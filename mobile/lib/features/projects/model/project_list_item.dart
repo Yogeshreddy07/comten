@@ -37,14 +37,14 @@ class ProjectListItem {
     );
   }
 
-  ProjectListItem copyWith({bool? isActive, String? status}) {
+  ProjectListItem copyWith({bool? isActive, String? status, int? moduleCount}) {
     return ProjectListItem(
       id: id,
       projectCode: projectCode,
       projectName: projectName,
       clientId: clientId,
       isActive: isActive ?? this.isActive,
-      moduleCount: moduleCount,
+      moduleCount: moduleCount ?? this.moduleCount,
       status: status ?? this.status,
     );
   }

@@ -134,7 +134,6 @@ class _ModuleDetailsScreenState extends State<ModuleDetailsScreen> {
 
     if (result.success) {
       SnackbarUtil.showSuccess(context, result.message);
-      viewModel.fetchModuleDetails(module.id);
     } else {
       SnackbarUtil.showError(context, result.message);
     }

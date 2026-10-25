@@ -41,7 +41,8 @@ class ActivityViewModel extends ChangeNotifier {
     final result = await _repository.getActivities();
 
     if (result.success) {
-      _activities = (result.data as List<Activity>?) ?? [];
+      _activities = ((result.data as List<Activity>?) ?? [])
+          .where((activity) => activity.active).toList();
       _loadState = ActivityLoadState.success;
     } else {
       _errorMessage = result.message;
