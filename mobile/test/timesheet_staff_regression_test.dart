@@ -21,7 +21,8 @@ class StageRepository extends ModuleRepository {
   @override
   Future<ApiResult> getCompletedLedModules() async => ApiResult(success:true,message:'',data:[
     const ModuleListItem(id:1,projectId:1,projectCode:'P1',projectName:'Project',moduleName:'Done',status:'COMPLETED',workStage:'BILLING'),
-    const ModuleListItem(id:2,projectId:1,projectCode:'P1',projectName:'Project',moduleName:'Open',status:'IN_PROGRESS',workStage:'BILLING')]);
+    const ModuleListItem(id:2,projectId:1,projectCode:'P1',projectName:'Project',moduleName:'Open',status:'IN_PROGRESS',workStage:'BILLING'),
+    const ModuleListItem(id:3,projectId:1,projectCode:'P1',projectName:'Project',moduleName:'Paid',status:'IN_PROGRESS',workStage:'BILLING',billingStatus:'FULL_PAYMENT_RECEIVED')]);
   @override
   Future<ApiResult> updateWorkStage(int id,String stage) async {
     writes++;
@@ -70,7 +71,14 @@ void main() {
     expect(blocked.message,contains('already completed and cannot be moved back to WIP'));
     expect(repository.writes,0);
     expect(model.ledModules.first.workStage,'BILLING');
+    expect((await model.updateWorkStage(3,'WIP')).message,contains('already completed and cannot be moved back to WIP'));
+    final repeat=await model.updateWorkStage(1,'BILLING');
+    expect(repeat.success,false);
+    expect(repeat.message,'This module is already in Billing.');
+    expect(repository.writes,0);
     expect((await model.updateWorkStage(2,'WIP')).success,true);
+    expect(repository.writes,1);
+    expect((await model.updateWorkStage(2,'WIP')).message,'This module is already in WIP.');
     expect(repository.writes,1);
     model.dispose();
   });

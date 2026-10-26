@@ -51,9 +51,14 @@ class StatusUpdateViewModel extends ChangeNotifier {
 
   Future<ApiResult> updateWorkStage(int moduleId, String workStage) async {
     final module = _ledModules.where((m) => m.id == moduleId).firstOrNull;
-    if (workStage == 'WIP' && module?.status == 'COMPLETED') {
+    if (workStage == 'WIP' && (module?.status == 'COMPLETED' ||
+        module?.billingStatus == 'FULL_PAYMENT_RECEIVED')) {
       return ApiResult(success: false,
           message: 'This module is already completed and cannot be moved back to WIP.');
+    }
+    if (module != null && (module.workStage ?? 'WIP') == workStage) {
+      return ApiResult(success: false, message: workStage == 'BILLING'
+          ? 'This module is already in Billing.' : 'This module is already in WIP.');
     }
     if (_isSaving) {
       return ApiResult(success: false, message: 'A status update is already in progress.');

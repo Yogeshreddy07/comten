@@ -71,6 +71,16 @@ def test_project_module_change_and_financial_workflows(tokens):
     assert r.status_code==200,r.text
     assert r.json()['data']['reversionPending']
     assert get('modules',mid)['billingStatus']=='FULL_PAYMENT_RECEIVED'
+    # Re-submitting while the Captain has not decided must not queue a duplicate.
+    pending=lambda:[q for q in db.collection('billing-status-change-requests').where('moduleId','==',mid).stream() if q.to_dict()['approvalStatus']=='PENDING']
+    for _ in range(2):
+        again=client.put(f'/api/billing/{mid}',json={'status':'INVOICE_RAISED','spocName':'DEMO'},headers=tokens['controller'])
+        assert again.status_code==409 and 'already pending Captain approval' in again.json()['message']
+    assert len(pending())==1
+    request_id=pending()[0].id
+    assert client.put(f'/api/billing-status-change-requests/{request_id}/reject',json={'reason':'no'},headers=tokens['captain']).status_code==200
+    assert client.put(f'/api/billing/{mid}',json={'status':'INVOICE_RAISED','spocName':'DEMO'},headers=tokens['controller']).status_code==200
+    assert len(pending())==1
     assert client.put(f'/api/billing/{mid}',json={'status':'bogus'},headers=tokens['captain']).status_code==422
 
 
@@ -159,8 +169,12 @@ def test_assignment_validation_lifecycle_and_stale_approval(tokens):
     assert client.put(f'/api/projects/{p["id"]}/work-stage',json={'workStage':'BILLING'},headers=tokens['lead']).status_code==404
     request={'moduleId':mid,'proposedEstimatedMinutes':90}
     first=client.post('/api/module-change-requests',json=request,headers=tokens['controller']).json()['data']['id']
-    second=client.post('/api/module-change-requests',json=request|{'proposedEstimatedMinutes':100},headers=tokens['controller']).json()['data']['id']
+    # Only one change request per module may await the Captain at a time.
+    duplicate=client.post('/api/module-change-requests',json=request|{'proposedEstimatedMinutes':100},headers=tokens['controller'])
+    assert duplicate.status_code==409 and 'already pending Captain approval' in duplicate.json()['message']
     assert client.put(f'/api/module-change-requests/{first}/approve',json={},headers=tokens['captain']).status_code==200
+    second=client.post('/api/module-change-requests',json=request|{'proposedEstimatedMinutes':100},headers=tokens['controller']).json()['data']['id']
+    db.collection('modules').document(str(mid)).update({'estimatedMinutes':95})
     assert client.put(f'/api/module-change-requests/{second}/approve',json={},headers=tokens['captain']).status_code==409
     assert client.put(f'/api/modules/{mid}/work-stage',json={'workStage':'BILLING'},headers=tokens['lead']).status_code==200
     assert client.delete(f'/api/projects/{p["id"]}',headers=tokens['captain']).status_code==200
@@ -243,3 +257,13 @@ def test_msg91_firebase_linkage_concurrent_replay_and_changed_phone(tokens,monke
         assert minted==['4'] and get('employees',4)['phoneVerified'] is False
     finally:
         employee.update({'phone':person.get('phone',''),'phoneVerified':person.get('phoneVerified',False)});ref.delete()
+
+
+def test_simultaneous_change_request_submits_create_one_request(tokens):
+    body={'projectCode':'DUP-'+uuid.uuid4().hex[:6],'projectName':'Duplicate submit synthetic','moduleName':'Design','teamLeadId':3,'memberIds':[4],'estimatedMinutes':60}
+    mid=client.post('/api/projects',json=body,headers=tokens['controller']).json()['data']['modules'][0]['id']
+    request={'moduleId':mid,'proposedEstimatedMinutes':120}
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        responses=list(pool.map(lambda _:client.post('/api/module-change-requests',json=request,headers=tokens['controller']),range(4)))
+    assert sorted(r.status_code for r in responses)==[200,409,409,409]
+    assert len(list(db.collection('module-change-requests').where('moduleId','==',mid).stream()))==1

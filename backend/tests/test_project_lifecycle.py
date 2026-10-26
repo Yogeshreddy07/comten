@@ -172,6 +172,30 @@ def test_completed_module_cannot_be_moved_back_to_wip_by_lead(graph, stage):
     assert get('modules',mid)['workStage']==stage
 
 
+def test_billing_completed_module_cannot_return_to_wip(graph):
+    client, _, lead, *_ = graph
+    _, mid = create(graph)
+    db.collection('modules').document(str(mid)).update({'status':'IN_PROGRESS','workStage':'BILLING','billingStatus':'FULL_PAYMENT_RECEIVED'})
+    app.dependency_overrides[current_user] = lambda: {'id':lead,'role':'TEAM_LEADER'}
+    response=client.put(f'/api/modules/{mid}/work-stage',json={'workStage':'WIP'})
+    assert response.status_code == 409
+    assert 'already completed and cannot be moved back to WIP' in response.json()['message']
+    assert get('modules',mid)['workStage']=='BILLING'
+
+
+def test_module_already_in_billing_cannot_be_moved_to_billing_again(graph):
+    client, _, lead, *_ = graph
+    _, mid = create(graph)
+    app.dependency_overrides[current_user] = lambda: {'id':lead,'role':'TEAM_LEADER','name':'Lead'}
+    assert client.put(f'/api/modules/{mid}/work-stage',json={'workStage':'BILLING'}).status_code == 200
+    notified=len([n for n in db.collection('notifications').stream() if n.to_dict().get('moduleId')==mid])
+    response=client.put(f'/api/modules/{mid}/work-stage',json={'workStage':'BILLING'})
+    assert response.status_code == 409 and response.json()['message']=='This module is already in Billing.'
+    assert len([n for n in db.collection('notifications').stream() if n.to_dict().get('moduleId')==mid])==notified
+    assert client.put(f'/api/modules/{mid}/work-stage',json={'workStage':'WIP'}).status_code == 200
+    assert client.put(f'/api/modules/{mid}/work-stage',json={'workStage':'WIP'}).json()['message']=='This module is already in WIP.'
+
+
 def test_staff_only_directory_excludes_managers_and_preserves_controller_directory(graph):
     client, put, lead, *_ = graph
     put('employees',lead+40,{'role':'PROJECT_CONTROLLER','active':True})

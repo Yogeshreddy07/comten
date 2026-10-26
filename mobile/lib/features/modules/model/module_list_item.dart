@@ -20,6 +20,9 @@ class ModuleListItem {
   /// distinct from [status], the module lifecycle status.
   final String? workStage;
 
+  /// Billing Management status (e.g. FULL_PAYMENT_RECEIVED once Completed).
+  final String? billingStatus;
+
   const ModuleListItem({
     required this.id,
     required this.projectId,
@@ -34,6 +37,7 @@ class ModuleListItem {
     this.completedHours,
     required this.status,
     this.workStage,
+    this.billingStatus,
   });
 
   factory ModuleListItem.fromJson(Map<String, dynamic> json) {
@@ -55,6 +59,7 @@ class ModuleListItem {
       completedHours: json['completedHours'] as int?,
       status: json['status'] as String? ?? '',
       workStage: json['workStage'] as String?,
+      billingStatus: json['billingStatus'] as String?,
     );
   }
 
@@ -73,6 +78,7 @@ class ModuleListItem {
       completedHours: completedHours,
       status: status ?? this.status,
       workStage: workStage ?? this.workStage,
+      billingStatus: billingStatus,
     );
   }
 }

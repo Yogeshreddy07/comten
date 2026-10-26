@@ -27,6 +27,7 @@ from .store import db, get, rows, all_rows, transact
 from .messaging import notify
 from .mobile_contracts import module_response,project_response
 from .roster import refresh_project_roster
+from .approvals import claim_pending
 from .module_validation import validate_module, MODULE_FIELDS, WORK_STAGES, STATUSES
 
 @asynccontextmanager
@@ -359,7 +360,10 @@ def privileged_action(collection: str,key: str,action: str,body: dict,user=Depen
             if set(body)!={'workStage'} or body['workStage'] not in ('WIP','BILLING'): raise HTTPException(422,'Invalid work stage')
             parent=db.collection('projects').document(str(row['projectId'])).get(transaction=tx).to_dict()
             if not row.get('active') or row.get('deleted') or not parent or not parent.get('active') or parent.get('deleted'): raise HTTPException(409,'Module is inactive')
-            if row.get('status')=='COMPLETED' and body['workStage']=='WIP': raise HTTPException(409,'This module is already completed and cannot be moved back to WIP.')
+            # Completed work (module status, or Billing Management's Completed
+            # stage once full payment is in) never returns to WIP.
+            if body['workStage']=='WIP' and (row.get('status')=='COMPLETED' or row.get('billingStatus')=='FULL_PAYMENT_RECEIVED'): raise HTTPException(409,'This module is already completed and cannot be moved back to WIP.')
+            if (row.get('workStage') or 'WIP')==body['workStage']: raise HTTPException(409,'This module is already in Billing.' if body['workStage']=='BILLING' else 'This module is already in WIP.')
             changes={'workStage':body['workStage']}
         elif action in ('approve','reject'):
             require(user,'CAPTAIN')
@@ -433,7 +437,11 @@ def create_request(collection: str,body: dict,user=Depends(current_user)):
             record['currentStatus']=target.get('billingStatus')
             record['proposedStatus']=body['requestedStatus']
     record.update(id=key,requestedById=user['id'],requestedByName=user['name'],approvalStatus='PENDING',status='PENDING',createdAt=datetime.now(timezone.utc).isoformat())
-    db.collection(collection).document(str(key)).create(record)
+    @firestore.transactional
+    def submit(tx):
+        claim_pending(tx,collection,record['projectId'] if collection=='project-deactivation-requests' else record['moduleId'],key)
+        tx.create(db.collection(collection).document(str(key)),record)
+    transact(submit)
     if collection in ('module-change-requests','billing-status-change-requests'):
         for captain in all_rows('employees',[('role','CAPTAIN')]):
             if captain.get('active'):

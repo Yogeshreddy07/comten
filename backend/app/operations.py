@@ -2,7 +2,8 @@ from datetime import datetime,timezone
 from fastapi import APIRouter,Depends,HTTPException,Request
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
-from .store import db,get,rows,all_rows
+from .store import db,get,rows,all_rows,transact
+from .approvals import claim_pending
 from .security import current_user,manager,require
 from .messaging import notify
 from .roster import refresh_project_roster
@@ -41,6 +42,7 @@ def update_billing(mid: int,body: dict,user=Depends(current_user)):
         if not p or not p.get('active') or p.get('deleted') or not m.get('active',True) or m.get('deleted') or m.get('workStage')!='BILLING': raise HTTPException(409,'Module is not editable for billing')
         if m.get('billingStatus')=='FULL_PAYMENT_RECEIVED' and body['status']!='FULL_PAYMENT_RECEIVED' and user['role']!='CAPTAIN':
             key=int(datetime.now(timezone.utc).timestamp()*1000000)
+            claim_pending(tx,'billing-status-change-requests',mid,key)
             tx.create(db.collection('billing-status-change-requests').document(str(key)),{'id':key,'moduleId':mid,'moduleName':m['moduleName'],'projectId':m['projectId'],'projectCode':m['projectCode'],'projectName':m['projectName'],'requestedById':user['id'],'requestedByName':user['name'],'requestedStatus':body['status'],'proposedStatus':body['status'],'proposedSpocName':body.get('spocName',''),'currentStatus':m['billingStatus'],'approvalStatus':'PENDING','status':'PENDING','remarks':body.get('remarks',''),'createdAt':datetime.now(timezone.utc).isoformat()})
             return billing_row(m)|{'reversionPending':True,'requestId':key}
         changes={'billingStatus':body['status'],'spocName':str(body.get('spocName',''))[:100],'remarks':str(body.get('remarks',''))[:1000],'updatedById':user['id'],'updatedByName':user['name'],'updatedAt':datetime.now(timezone.utc).isoformat()}
@@ -91,7 +93,11 @@ def deactivate(key: str,request: Request,user=Depends(current_user)):
         modules=list(all_rows('modules',[('projectId',int(key))]))
         if any(m.get('workStage')=='BILLING' for m in modules):
             p=record;request_id=int(datetime.now(timezone.utc).timestamp()*1000000)
-            db.collection('project-deactivation-requests').document(str(request_id)).create({'id':request_id,'projectId':p['id'],'projectName':p['projectName'],'projectCode':p['projectCode'],'requestedById':user['id'],'requestedByName':user['name'],'approvalStatus':'PENDING','status':'PENDING','createdAt':datetime.now(timezone.utc).isoformat()})
+            @firestore.transactional
+            def submit(tx):
+                claim_pending(tx,'project-deactivation-requests',p['id'],request_id)
+                tx.create(db.collection('project-deactivation-requests').document(str(request_id)),{'id':request_id,'projectId':p['id'],'projectName':p['projectName'],'projectCode':p['projectCode'],'requestedById':user['id'],'requestedByName':user['name'],'approvalStatus':'PENDING','status':'PENDING','createdAt':datetime.now(timezone.utc).isoformat()})
+            transact(submit)
             return {'success':True,'message':'Deactivation submitted for Captain approval','data':p}
     ref=db.collection(collection).document(key)
     @firestore.transactional
