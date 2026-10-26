@@ -1,4 +1,5 @@
 """Identity invariants exercised against the local Firebase emulators."""
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -167,3 +168,18 @@ def test_preflight_requires_manager_and_rejects_invalid_fields(client):
     response = client.post('/api/employees/validate-identity', json={'email': 'test@example.invalid', 'password': 'NeverEchoThisPassword'})
     assert response.status_code == 422 and 'NeverEchoThisPassword' not in response.text
     assert client.post('/api/employees/validate-identity', json={'email': 'not-an-email'}).status_code == 422
+
+
+def test_auto_codes_use_role_prefix_with_independent_sequences(client):
+    codes = {role: [create(client, role=role)['employeeCode'] for _ in range(2)]
+             for role in ('PROJECT_CONTROLLER', 'TEAM_LEADER', 'EMPLOYEE')}
+    for role, prefix in (('PROJECT_CONTROLLER', 'PC'), ('TEAM_LEADER', 'TL'), ('EMPLOYEE', 'EMP')):
+        first, second = codes[role]
+        assert first.startswith(prefix) and second.startswith(prefix)
+        assert re.fullmatch(prefix + r'\d{3,}', first)
+        assert int(second[len(prefix):]) == int(first[len(prefix):]) + 1
+    # A role's numbering is unaffected by codes issued to other roles.
+    pc = create(client, role='PROJECT_CONTROLLER')['employeeCode']
+    assert int(pc[2:]) == int(codes['PROJECT_CONTROLLER'][1][2:]) + 1
+    password = activate_employee(client, pc)
+    assert client.post('/api/auth/login', json={'employeeCode': pc, 'password': password}).status_code == 200

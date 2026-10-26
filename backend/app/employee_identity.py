@@ -7,6 +7,11 @@ from firebase_admin import firestore
 from .models import normalize_phone
 from .store import db, transact
 
+ROLE_PREFIXES = {'CAPTAIN': 'CAP', 'PROJECT_CONTROLLER': 'PC', 'TEAM_LEADER': 'TL', 'EMPLOYEE': 'EMP'}
+# 'sequence' is the original EMP counter; keep its key so issued numbers carry on.
+SEQUENCE_KEYS = {'EMP': 'sequence', 'PC': 'sequencePC', 'TL': 'sequenceTL', 'CAP': 'sequenceCAP'}
+CODE_PATTERN = re.compile(r'(CAP|PC|TL|EMP)(\d+)')
+
 
 def identity_conflicts(records, candidate, exclude_uid=None):
     """Return field errors naming the owners, without exposing other contacts."""
@@ -50,20 +55,24 @@ def save_identity(uid, record, *, creating):
         if not creating and not current:
             raise HTTPException(404, 'Employee not found')
         candidate = record.copy() if creating else current | record
-        sequence = int(state.get('sequence', 0))
+        # Each role numbers its own codes (PC001, TL001, EMP001, ...), continuing
+        # from the highest code already issued with that prefix.
+        sequences = {prefix: int(state.get(SEQUENCE_KEYS[prefix], 0)) for prefix in SEQUENCE_KEYS}
         for snap in snapshots:
-            match = re.fullmatch(r'EMP(\d+)', str(snap.to_dict().get('employeeCode', '')).upper())
+            match = CODE_PATTERN.fullmatch(str(snap.to_dict().get('employeeCode', '')).upper())
             if match:
-                sequence = max(sequence, int(match[1]))
+                sequences[match[1]] = max(sequences[match[1]], int(match[2]))
         if creating and not candidate.get('employeeCode'):
-            sequence += 1
-            candidate['employeeCode'] = f'EMP{sequence:03d}'
+            prefix = ROLE_PREFIXES.get(candidate.get('role'), 'EMP')
+            sequences[prefix] += 1
+            candidate['employeeCode'] = f'{prefix}{sequences[prefix]:03d}'
         conflicts = identity_conflicts([s.to_dict() | {'id': s.id} for s in snapshots], candidate, uid)
         if conflicts:
             raise HTTPException(409, ' '.join(conflicts.values()))
         # Keep the counter even after a failed provisioning attempt so no
         # issued identity is reused. Existing employee codes never change.
-        tx.set(lock, {'sequence': sequence, 'version': int(state.get('version', 0)) + 1})
+        tx.set(lock, {**{SEQUENCE_KEYS[prefix]: value for prefix, value in sequences.items()},
+                      'version': int(state.get('version', 0)) + 1})
         if creating:
             tx.create(ref, candidate)
         else:
