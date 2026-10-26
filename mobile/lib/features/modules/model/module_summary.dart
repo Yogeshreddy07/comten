@@ -82,7 +82,12 @@ class ModuleSummary {
     this.area,
   });
 
-  List<String> get memberNames => members.map((m) => m.name).toList();
+  /// Display names of the team members, excluding the Team Leader (shown
+  /// on its own row) even when the backend lists them as a member too.
+  List<String> get memberNames => members
+      .where((m) => m.userId != teamLeadId)
+      .map((m) => m.name)
+      .toList();
 
   ModuleSummary copyWith({String? status, String? workStage}) {
     return ModuleSummary(
