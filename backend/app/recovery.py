@@ -113,7 +113,9 @@ async def phone_send(body: dict,user=Depends(current_user)):
         old=ref.get(transaction=tx).to_dict() or {}
         rate=throttle.get(transaction=tx).to_dict() or {}
         count=rate.get('count',0) if rate.get('window',0)>now-3600 else 0
-        if old.get('sent',0)>now-60 or rate.get('lastSent',0)>now-60 or count>=5:
+        # A locked-out code can be replaced immediately; the hourly cap still applies.
+        locked=old.get('attempts',0)>=5 and old.get('phone')==phone
+        if (not locked and (old.get('sent',0)>now-60 or rate.get('lastSent',0)>now-60)) or count>=5:
             return False
         tx.set(ref,{'challengeId':challenge,'sent':now,'expires':now+600,'attempts':0,'phone':phone,'state':'SENDING'})
         tx.set(throttle,{'lastSent':now,'count':count+1,'window':rate.get('window',now) if count else now,'expires':now+86400})
@@ -135,25 +137,40 @@ async def phone_verify(body: dict,user=Depends(current_user)):
     @firestore.transactional
     def claim(tx):
         row=ref.get(transaction=tx).to_dict()
-        if not row or row.get('state')!='SENT' or row['expires']<time.time() or row['attempts']>=5: return None
-        if row.get('busyUntil',0)>time.time(): return None
+        if not row or row.get('state')!='SENT' or row['expires']<time.time(): return 'OTP has expired. Tap Resend OTP to get a new code.'
+        if row['attempts']>=5: return 'Too many incorrect attempts. Tap Resend OTP to get a new code.'
+        if row.get('busyUntil',0)>time.time(): return 'Verification already in progress. Please wait a moment and retry.'
         tx.update(ref,{'attempts':row['attempts']+1,'claim':claim_id,'busyUntil':time.time()+60})
         return row
     row=transact(claim)
-    if not row: raise HTTPException(401,'Invalid or expired verification code')
+    if isinstance(row,str): raise HTTPException(401,row)
     try:
         if settings.environment=='local':
-            if body.get('otp')!='123456': raise HTTPException(401,'Invalid or expired verification code')
+            if str(body.get('otp','')).strip()!='123456': raise HTTPException(401,'Invalid or expired verification code')
         else:
             if row.get('widgetId')!=settings.msg91_widget_id: raise HTTPException(401,'Widget configuration changed; request another code')
-            await verify_msg91(row['phone'],str(body.get('otp','')),row['providerRequestId'])
-    except HTTPException:
+            await verify_msg91(row['phone'],str(body.get('otp','')).strip(),row['providerRequestId'])
+    except Exception as error:
+        rejected=isinstance(error,HTTPException) and error.status_code==401
+        wrong=rejected and error.detail=='Invalid or expired verification code'
+        retired=rejected and str(error.detail).startswith('OTP has expired')
+        # Always release the claim so the next try is evaluated. Provider
+        # outages do not count against the user's attempts, and a code the
+        # provider retired is closed so a new one can be sent at once.
         @firestore.transactional
         def release(tx):
             current=ref.get(transaction=tx).to_dict() or {}
-            if current.get('claim')==claim_id: tx.update(ref,{'busyUntil':0})
+            if current.get('claim')!=claim_id: return
+            change={'busyUntil':0}
+            if retired: change|={'attempts':5,'expires':0}
+            elif not rejected: change['attempts']=max(current.get('attempts',1)-1,0)
+            tx.update(ref,change)
         transact(release)
-        raise
+        if wrong:
+            left=5-row['attempts']-1
+            raise HTTPException(401,f'Incorrect OTP. {left} attempt{"s" if left!=1 else ""} left.' if left>0 else 'Too many incorrect attempts. Tap Resend OTP to get a new code.') from None
+        if isinstance(error,HTTPException): raise
+        raise HTTPException(502,'SMS verification is temporarily unavailable. Please retry.') from None
     @firestore.transactional
     def consume(tx):
         current=ref.get(transaction=tx).to_dict() or {}

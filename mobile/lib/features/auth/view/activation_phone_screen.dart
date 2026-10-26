@@ -10,7 +10,6 @@ import '../widgets/auth_header.dart';
 import '../widgets/auth_scaffold.dart';
 import '../widgets/auth_text_field.dart';
 import 'login_screen.dart';
-import 'activate_account_screen.dart';
 
 class ActivationPhoneScreen extends StatefulWidget {
   const ActivationPhoneScreen({super.key});
@@ -78,9 +77,6 @@ class _ActivationPhoneScreenState extends State<ActivationPhoneScreen> {
           TextButton(onPressed: vm.isLoading || _remaining > 0 ? null : _send,
             child: Text(_remaining > 0 ? 'Resend OTP in $_remaining seconds' : 'Resend Phone OTP')),
         ],
-        TextButton(onPressed: vm.isLoading ? null : () {
-          Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const ActivateAccountScreen()), (_) => false);
-        }, child: const Text('Start activation again')),
       ])));
   }
 }

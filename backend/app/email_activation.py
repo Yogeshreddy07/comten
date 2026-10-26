@@ -14,7 +14,16 @@ from .email_templates import render
 from .models import valid_password
 
 router = APIRouter(prefix='/api/auth/signup')
-GENERIC = 'If this account needs activation, an OTP has been sent to its registered email.'
+MAX_ATTEMPTS = 5
+EXPIRED = 'OTP has expired. Tap Resend OTP to get a new code.'
+LOCKED = 'Too many incorrect attempts. Tap Resend OTP to get a new code.'
+
+
+def wrong_otp(attempts):
+    left = MAX_ATTEMPTS - attempts
+    if left <= 0:
+        return LOCKED
+    return f'Incorrect OTP. {left} attempt{"s" if left != 1 else ""} left.'
 
 
 def mask_email(value):
@@ -51,7 +60,8 @@ async def send_activation(person):
     def reserve(tx):
         old = ref.get(transaction=tx).to_dict() or {}
         count = old.get('sendCount', 0) if old.get('sendWindow', 0) > now - 3600 else 0
-        if old.get('lastSent', 0) > now - 60:
+        # A locked-out OTP can be replaced immediately; the hourly cap still applies.
+        if old.get('lastSent', 0) > now - 60 and old.get('attempts', 0) < MAX_ATTEMPTS:
             if (old.get('deliveryState') == 'ACCEPTED' and old.get('recipientHash') == recipient_hash(person)
                     and old.get('expires', 0) > now and old.get('otpHash') != 'consumed'):
                 return False
@@ -86,21 +96,47 @@ async def send_activation(person):
     return True
 
 
+def resume_phone(person):
+    """Reissue the phone session for an employee whose email and password are already done."""
+    if person.get('activationStatus') != 'PHONE_PENDING' or not person.get('emailVerified'):
+        return None
+    ref = db.collection('email-activation').document(str(person['id']))
+    state = ref.get().to_dict() or {}
+    phone = normalize_phone(person.get('phone', ''))
+    # An email changed after password setup needs fresh email proof.
+    if not state.get('passwordSetAt') or state.get('recipientHash') != recipient_hash(person):
+        return None
+    token = secrets.token_urlsafe(32)
+    ref.update({'phoneTokenHash': digest(token), 'phoneExpires': time.time() + 1800,
+                'phoneHash': digest('phone:' + phone)})
+    return {'stage': 'PHONE', 'employeeCode': person['employeeCode'],
+            'phoneVerificationToken': token, 'maskedPhone': mask_phone(phone)}
+
+
 @router.post('/send-otp')
 async def send(body: dict):
     person = resolve(body.get('employeeCode', ''))
-    data = None
-    if eligible(person):
-        await send_activation(person)
-        data = {'maskedEmail': mask_email(person['email'])}
-    return {'success': True, 'data': data, 'message': GENERIC}
+    if not person:
+        raise HTTPException(404, 'No employee found with this employee code. Check the code and try again.')
+    if not eligible(person):
+        status = person.get('activationStatus')
+        if status == 'ACTIVE' or (status not in ('PENDING', 'PHONE_PENDING') and person.get('phoneVerified')):
+            raise HTTPException(409, 'This employee is already activated. Please log in with your password.')
+        raise HTTPException(422, 'No email is registered for this employee. Contact your administrator.')
+    resumed = resume_phone(person)
+    if resumed:
+        return {'success': True, 'data': resumed,
+                'message': 'Email and password are already set. Verify your enrolled phone to finish activation.'}
+    await send_activation(person)
+    return {'success': True, 'data': {'stage': 'EMAIL', 'maskedEmail': mask_email(person['email'])},
+            'message': 'OTP sent to your registered email.'}
 
 
 @router.post('/verify-otp')
 def verify(body: dict):
     person = resolve(body.get('employeeCode', ''))
     if not eligible(person):
-        raise HTTPException(401, 'Invalid or expired verification code')
+        raise HTTPException(401, EXPIRED)
     uid = str(person['id'])
     ref = db.collection('email-activation').document(uid)
     proof = secrets.token_urlsafe(32)
@@ -108,17 +144,20 @@ def verify(body: dict):
     @firestore.transactional
     def consume(tx):
         state = ref.get(transaction=tx).to_dict() or {}
+        attempts = state.get('attempts', 0)
         if (state.get('deliveryState') != 'ACCEPTED' or state.get('expires', 0) < time.time()
-                or state.get('recipientHash') != recipient_hash(person) or state.get('attempts', 0) >= 5
-                or state.get('proofHash')):
-            return False
-        valid = hmac.compare_digest(state['otpHash'], digest('activation:' + uid + ':' + str(body.get('otp', ''))))
-        tx.update(ref, {'attempts': state.get('attempts', 0) + 1,
+                or state.get('recipientHash') != recipient_hash(person) or state.get('proofHash')):
+            return EXPIRED
+        if attempts >= MAX_ATTEMPTS:
+            return LOCKED
+        valid = hmac.compare_digest(state['otpHash'], digest('activation:' + uid + ':' + str(body.get('otp', '')).strip()))
+        tx.update(ref, {'attempts': attempts + 1,
                        **({'otpHash': 'consumed', 'proofHash': digest(proof)} if valid else {})})
-        return valid
+        return None if valid else wrong_otp(attempts + 1)
 
-    if not transact(consume):
-        raise HTTPException(401, 'Invalid or expired verification code')
+    failure = transact(consume)
+    if failure:
+        raise HTTPException(401, failure)
     return {'success': True, 'message': 'Email verified. Set your password.',
             'data': {'employeeCode': person['employeeCode'], 'signupToken': proof}}
 
@@ -184,7 +223,7 @@ def set_password(body: dict):
 def phone_session(body):
     person = resolve(body.get('employeeCode', ''))
     if not person or person.get('activationStatus') != 'PHONE_PENDING' or not person.get('emailVerified'):
-        raise HTTPException(401, 'Invalid or expired phone activation session. Start activation again.')
+        raise HTTPException(401, 'Phone verification session expired. Enter your employee code on Activate Account to continue.')
     ref = db.collection('email-activation').document(str(person['id']))
     state = ref.get().to_dict() or {}
     token_hash = digest(str(body.get('phoneVerificationToken', '')))
@@ -192,7 +231,7 @@ def phone_session(body):
             or state.get('phoneExpires', 0) < time.time()
             or state.get('recipientHash') != recipient_hash(person)
             or state.get('phoneHash') != digest('phone:' + normalize_phone(person.get('phone', '')))):
-        raise HTTPException(401, 'Invalid or expired phone activation session. Start activation again.')
+        raise HTTPException(401, 'Phone verification session expired. Enter your employee code on Activate Account to continue.')
     return person, ref, state
 
 
@@ -248,7 +287,7 @@ async def verify_phone(body: dict):
                     or verified.get('state') != 'CONSUMED'
                     or verified.get('verifiedAt', 0) < session.get('passwordSetAt', time.time())
                     or verified.get('phone') != normalize_phone(current.get('phone', ''))):
-                raise HTTPException(409, 'Activation details changed. Start activation again.')
+                raise HTTPException(409, 'Activation details changed. Enter your employee code on Activate Account to continue.')
             tx.update(employee_ref, {'activationStatus': 'ACTIVE', 'permissionVersion': firestore.Increment(1)})
             tx.update(ref, {'phoneTokenHash': None, 'phoneExpires': 0, 'enableBusyUntil': 0})
         transact(finish)

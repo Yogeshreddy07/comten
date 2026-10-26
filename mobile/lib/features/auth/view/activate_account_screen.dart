@@ -10,6 +10,7 @@ import '../widgets/auth_button.dart';
 import '../widgets/auth_header.dart';
 import '../widgets/auth_scaffold.dart';
 import '../widgets/auth_text_field.dart';
+import 'activation_phone_screen.dart';
 import 'create_password_screen.dart';
 
 class ActivateAccountScreen extends StatefulWidget {
@@ -39,6 +40,13 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     final result = await vm.sendActivationOtp(_code.text.trim().toUpperCase());
     if (!mounted) return;
     if (!result.success) { SnackbarUtil.showError(context, result.message); return; }
+    if (result.data is Map && result.data['stage'] == 'PHONE') {
+      _timer?.cancel();
+      if (!context.canPushRoute) return;
+      SnackbarUtil.showSuccess(context, result.message);
+      Navigator.pushAndRemoveUntil(context, MaterialPageRoute(builder: (_) => const ActivationPhoneScreen()), (_) => false);
+      return;
+    }
     setState(() {
       _sent = true; _remaining = 60; _otp.clear();
       _maskedEmail = result.data is Map && result.data['maskedEmail'] is String

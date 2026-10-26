@@ -183,7 +183,14 @@ async def verify_msg91(phone: str, otp: str, request_id: str):
     headers=widget_config()
     result=await provider_request('POST','https://api.msg91.com/api/v5/widget/verifyOtp',headers=headers,json={'widgetId':settings.msg91_widget_id,'reqId':request_id,'otp':otp})
     if result.status_code in (401,403,429) or result.status_code>=500: raise HTTPException(502,'SMS widget is temporarily unavailable')
-    if not provider_success(result): raise HTTPException(401,'Invalid or expired verification code')
+    if not provider_success(result):
+        try: reason=str(result.json().get('message','')).lower()
+        except (ValueError,AttributeError): reason=''
+        # The widget retires a request after expiry or its own retry cap; a
+        # correct code cannot succeed then, so ask for a fresh one.
+        if any(marker in reason for marker in ('expire','limit','max','exceed')):
+            raise HTTPException(401,'OTP has expired. Tap Resend OTP to get a new code.')
+        raise HTTPException(401,'Invalid or expired verification code')
     access_token=result.json().get('message')
     if not isinstance(access_token,str) or not 16<=len(access_token)<=8192:
         raise HTTPException(502,'Invalid SMS widget verification response')

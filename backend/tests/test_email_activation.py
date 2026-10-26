@@ -229,3 +229,45 @@ def test_enrolled_sms_scope_rejects_unknown_and_deleted_contacts(client,monkeypa
     with pytest.raises(HTTPException): messaging.recipient_allowed('msg91','919000000099')
     db.collection('employees').document(str(person['id'])).update({'deleted':True})
     with pytest.raises(HTTPException): messaging.recipient_allowed('msg91',number)
+
+
+def test_send_otp_reports_unknown_and_already_active_codes(client):
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':'NOPE'+uuid.uuid4().hex[:6]}).status_code==404
+    person=create(client);activate_employee(client,person['employeeCode'])
+    response=client.post('/api/auth/signup/send-otp',json={'employeeCode':person['employeeCode']})
+    assert response.status_code==409 and 'already activated' in response.json()['message']
+
+
+def test_wrong_otps_report_attempts_left_and_correct_otp_still_works(client):
+    person=create(client);code=person['employeeCode']
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).json()['data']['stage']=='EMAIL'
+    for left in (4,3,2):
+        response=client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'000000'})
+        assert response.status_code==401 and f'{left} attempts left' in response.json()['message']
+    assert client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'}).status_code==200
+
+
+def test_locked_email_otp_can_be_resent_immediately(client):
+    person=create(client);code=person['employeeCode']
+    client.post('/api/auth/signup/send-otp',json={'employeeCode':code})
+    for _ in range(5): client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'000000'})
+    locked=client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'})
+    assert locked.status_code==401 and 'Resend' in locked.json()['message']
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==200
+    assert client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'}).status_code==200
+
+
+def test_phone_pending_employee_resumes_at_phone_step(client):
+    person=create(client);old=password_stage(client,person)
+    response=client.post('/api/auth/signup/send-otp',json={'employeeCode':person['employeeCode']})
+    assert response.status_code==200
+    data=response.json()['data']
+    assert data['stage']=='PHONE' and '**' in data['maskedPhone'] and person['phone'] not in response.text
+    assert client.post('/api/auth/signup/phone/send-otp',json=old).status_code==401
+    request={'employeeCode':person['employeeCode'],'phoneVerificationToken':data['phoneVerificationToken']}
+    assert client.post('/api/auth/signup/phone/send-otp',json=request).status_code==200
+    wrong=client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'000000'})
+    assert wrong.status_code==401 and '4 attempts left' in wrong.json()['message']
+    assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'000000'}).status_code==401
+    assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'123456'}).status_code==200
+    assert get('employees',person['id'])['activationStatus']=='ACTIVE'

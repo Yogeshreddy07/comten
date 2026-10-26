@@ -111,7 +111,15 @@ class AuthViewModel extends ChangeNotifier {
     _activationPhoneEmployeeCode = null;
     _activationMaskedPhone = null;
     try {
-      return await _repository.sendActivationOtp(employeeCode);
+      final result = await _repository.sendActivationOtp(employeeCode);
+      final data = result.data;
+      // Email and password already done: resume straight at phone verification.
+      if (result.success && data is Map && data['stage'] == 'PHONE' && data['phoneVerificationToken'] is String) {
+        _activationPhoneToken = data['phoneVerificationToken'] as String;
+        _activationPhoneEmployeeCode = (data['employeeCode'] as String?) ?? employeeCode;
+        _activationMaskedPhone = data['maskedPhone'] as String?;
+      }
+      return result;
     } finally { _setLoading(false); }
   }
 
@@ -151,7 +159,7 @@ class AuthViewModel extends ChangeNotifier {
       if (result.success) {
         final data = result.data;
         if (data is! Map || data['phoneVerificationToken'] is! String || (data['phoneVerificationToken'] as String).isEmpty) {
-          return ApiResult(success: false, message: 'Phone verification session unavailable. Start activation again.');
+          return ApiResult(success: false, message: 'Phone verification session unavailable. Enter your employee code on Activate Account to continue.');
         }
         _activationPhoneToken = data['phoneVerificationToken'] as String;
         _activationPhoneEmployeeCode = _signupSession!.employeeCode;
@@ -176,7 +184,7 @@ class AuthViewModel extends ChangeNotifier {
   Future<ApiResult> _activationPhoneRequest({String? otp}) async {
     if (_isLoading) return ApiResult(success: false, message: 'Please wait.');
     final token = _activationPhoneToken, code = _activationPhoneEmployeeCode;
-    if (token == null || code == null) return ApiResult(success: false, message: 'Activation session expired. Start activation again.');
+    if (token == null || code == null) return ApiResult(success: false, message: 'Phone verification session expired. Enter your employee code on Activate Account to continue.');
     _setLoading(true);
     try {
       final result = otp == null ? await _repository.sendActivationPhoneOtp(code, token)

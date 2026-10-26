@@ -35,6 +35,12 @@ class EmailRepository extends AuthRepository {
       ApiResult(success:otp=='123456',message:otp=='123456'?'Account activated':'Invalid phone OTP');
 }
 
+class ResumeRepository extends EmailRepository {
+  @override
+  Future<ApiResult> sendActivationOtp(String employeeCode) async => ApiResult(success:true,message:'Verify your enrolled phone',
+    data:{'stage':'PHONE','employeeCode':employeeCode,'phoneVerificationToken':'synthetic-phone-proof','maskedPhone':'+********3210'});
+}
+
 class EmailViewModel extends AuthViewModel {
   EmailViewModel(EmailRepository repository):super(repository:repository,secureStorage:SecureStorageService());
   @override
@@ -85,5 +91,24 @@ void main(){
     expect(find.byType(LoginScreen),findsOneWidget);
     expect(find.byType(PhoneNumberScreen),findsNothing);
     expect(tester.takeException(),isNull);
+  });
+
+  testWidgets('phone-pending employee code resumes at phone verification with no way back',(tester) async {
+    tester.view.physicalSize=const Size(480,1100);tester.view.devicePixelRatio=1;
+    addTearDown(tester.view.resetPhysicalSize);addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MultiProvider(providers:[
+      ChangeNotifierProvider<AuthViewModel>(create:(_)=>EmailViewModel(ResumeRepository())),
+      ChangeNotifierProvider(create:(_)=>ThemeViewModel()),
+    ], child:const MaterialApp(home:ActivateAccountScreen())));
+    await tester.enterText(find.widgetWithText(TextFormField,'Employee Code'),'EMP009');
+    await tester.tap(find.text('Send OTP'));await tester.pumpAndSettle();
+    expect(find.byType(ActivationPhoneScreen),findsOneWidget);
+    expect(find.text('Email OTP'),findsNothing);
+    expect(find.text('Send Phone OTP'),findsOneWidget);
+    expect(find.text('Start activation again'),findsNothing);
+    await tester.tap(find.text('Send Phone OTP'));await tester.pumpAndSettle();
+    await tester.enterText(find.widgetWithText(TextFormField,'Phone OTP'),'123456');
+    await tester.tap(find.text('Verify Phone OTP'));await tester.pumpAndSettle();
+    expect(find.text('Account activated'),findsOneWidget);
   });
 }
