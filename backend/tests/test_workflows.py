@@ -77,8 +77,11 @@ def test_project_module_change_and_financial_workflows(tokens):
         again=client.put(f'/api/billing/{mid}',json={'status':'INVOICE_RAISED','spocName':'DEMO'},headers=tokens['controller'])
         assert again.status_code==409 and 'already pending Captain approval' in again.json()['message']
     assert len(pending())==1
+    listed=lambda:next(r for r in client.get('/api/billing',headers=tokens['controller']).json()['data'] if r['moduleId']==mid)
+    assert listed()['reversionPending'] is True
     request_id=pending()[0].id
     assert client.put(f'/api/billing-status-change-requests/{request_id}/reject',json={'reason':'no'},headers=tokens['captain']).status_code==200
+    assert listed()['reversionPending'] is False
     assert client.put(f'/api/billing/{mid}',json={'status':'INVOICE_RAISED','spocName':'DEMO'},headers=tokens['controller']).status_code==200
     assert len(pending())==1
     assert client.put(f'/api/billing/{mid}',json={'status':'bogus'},headers=tokens['captain']).status_code==422
@@ -267,3 +270,25 @@ def test_simultaneous_change_request_submits_create_one_request(tokens):
         responses=list(pool.map(lambda _:client.post('/api/module-change-requests',json=request,headers=tokens['controller']),range(4)))
     assert sorted(r.status_code for r in responses)==[200,409,409,409]
     assert len(list(db.collection('module-change-requests').where('moduleId','==',mid).stream()))==1
+
+
+def test_delay_request_blocks_resubmission_until_decided(tokens):
+    body={'projectCode':'DLY-'+uuid.uuid4().hex[:6],'projectName':'Delay request synthetic','moduleName':'Design','teamLeadId':3,'memberIds':[4],'estimatedMinutes':60}
+    mid=client.post('/api/projects',json=body,headers=tokens['controller']).json()['data']['modules'][0]['id']
+    submit=lambda:client.post('/api/notifications/delay-requests',json={'moduleId':mid,'reason':'Waiting on client inputs'},headers=tokens['lead'])
+    first=submit()
+    assert first.status_code==200,first.text
+    rid=first.json()['data']['delayRequestId']
+    again=submit()
+    assert again.status_code==409 and 'already pending' in again.text
+    assert client.put(f'/api/delay-requests/{rid}/approve',json={},headers=tokens['lead']).status_code==403
+    approved=client.put(f'/api/delay-requests/{rid}/approve',json={},headers=tokens['controller'])
+    assert approved.status_code==200 and approved.json()['data']['approvalStatus']=='APPROVED'
+    assert client.put(f'/api/delay-requests/{rid}/reject',json={},headers=tokens['captain']).status_code==409
+    second=submit()
+    assert second.status_code==200,second.text
+    rid2=second.json()['data']['delayRequestId']
+    assert client.put(f'/api/delay-requests/{rid2}/reject',json={'reason':'Not justified'},headers=tokens['captain']).json()['data']['approvalStatus']=='REJECTED'
+    assert submit().status_code==200
+    decided=[n for n in db.collection('notifications').where('delayRequestId','in',[rid,rid2]).stream() if n.to_dict()['type'] in ('DELAY_APPROVED','DELAY_REJECTED')]
+    assert sorted(n.to_dict()['type'] for n in decided)==['DELAY_APPROVED','DELAY_REJECTED']

@@ -3,7 +3,7 @@ from fastapi import APIRouter,Depends,HTTPException,Request
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from .store import db,get,rows,all_rows,transact
-from .approvals import claim_pending
+from .approvals import claim_pending,has_pending
 from .security import current_user,manager,require
 from .messaging import notify
 from .roster import refresh_project_roster
@@ -18,7 +18,7 @@ def billing_row(m):
     lead=get('employees',m.get('teamLeadId')) if m.get('teamLeadId') else None
     status=m.get('billingStatus')
     stage='COMPLETED' if status=='FULL_PAYMENT_RECEIVED' else 'TO_BE_BILLED' if not status or status=='INVOICE_YET_TO_BE_RAISED' else 'PENDING'
-    return {**m,'moduleId':m['id'],'moduleStatus':m.get('status'),'status':status,'stage':stage,'editable':bool(m.get('active',True) and project.get('active') and not project.get('deleted')),'teamLeadName':lead.get('name') if lead else None,'updatedByName':m.get('updatedByName'),'reversionPending':False}
+    return {**m,'moduleId':m['id'],'moduleStatus':m.get('status'),'status':status,'stage':stage,'editable':bool(m.get('active',True) and project.get('active') and not project.get('deleted')),'teamLeadName':lead.get('name') if lead else None,'updatedByName':m.get('updatedByName'),'reversionPending':has_pending('billing-status-change-requests',m['id'])}
 
 
 @router.get('/billing')
@@ -117,8 +117,15 @@ def delay(body: dict,user=Depends(current_user)):
     if not m or m.get('teamLeadId')!=user['id']: raise HTTPException(403,'Permission denied')
     if not isinstance(body.get('reason'),str) or not body['reason'].strip() or len(body['reason'])>1000: raise HTTPException(422,'Reason is required')
     key=int(datetime.now(timezone.utc).timestamp()*1000000)
+    record={'id':key,'moduleId':m['id'],'moduleName':m['moduleName'],'projectId':m['projectId'],'projectName':m['projectName'],'projectCode':m['projectCode'],'reason':body['reason'],'requestedById':user['id'],'requestedByName':user['name'],'approvalStatus':'PENDING','status':'PENDING','createdAt':datetime.now(timezone.utc).isoformat()}
+    # One open delay request per module until a Captain/Project Controller decides it.
+    @firestore.transactional
+    def submit(tx):
+        claim_pending(tx,'delay-requests',m['id'],key)
+        tx.create(db.collection('delay-requests').document(str(key)),record)
+    transact(submit)
     result=None
     for captain in all_rows('employees'):
         if captain.get('active') and captain['role'] in ('CAPTAIN','PROJECT_CONTROLLER'):
-            result=notify(captain['id'],'Reason for delay',body['reason'],'DELAY_REQUESTED',key+captain['id'],moduleId=m['id'],moduleName=m['moduleName'],projectId=m['projectId'],projectName=m['projectName'],projectCode=m['projectCode'],senderId=user['id'],senderName=user['name'],reason=body['reason'])
+            result=notify(captain['id'],'Reason for delay',body['reason'],'DELAY_REQUESTED',key+captain['id'],delayRequestId=key,moduleId=m['id'],moduleName=m['moduleName'],projectId=m['projectId'],projectName=m['projectName'],projectCode=m['projectCode'],senderId=user['id'],senderName=user['name'],reason=body['reason'])
     return {'success':True,'message':'Delay reported','data':result}

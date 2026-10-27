@@ -10,6 +10,7 @@ import '../../../shared/enums/billing_status.dart';
 import '../../../shared/enums/spoc_name.dart';
 import '../../../shared/enums/user_role.dart';
 import '../../../shared/widgets/app_button.dart';
+import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_dropdown.dart';
 import '../../../shared/widgets/app_text_field.dart';
 import '../../auth/viewmodel/auth_viewmodel.dart';
@@ -95,8 +96,12 @@ class _UpdateBillingStatusScreenState
   @override
   Widget build(BuildContext context) {
     final viewModel = context.watch<BillingViewModel>();
+    // A billing change already waiting on the Captain locks the form, so the
+    // same request can't be sent again until it's approved or rejected.
+    final pendingApproval = widget.entry.reversionPending;
     final canEdit = context.watch<AuthViewModel>().role == UserRole.projectManager &&
-        widget.entry.editable;
+        widget.entry.editable &&
+        !pendingApproval;
 
     return Scaffold(
       appBar: AppBar(
@@ -138,6 +143,21 @@ class _UpdateBillingStatusScreenState
                     ),
                   ],
                 ),
+                if (pendingApproval) ...[
+                  const SizedBox(height: AppDimensions.sectionSpacing),
+                  AppCard(
+                    child: Row(
+                      children: [
+                        const Icon(Icons.hourglass_top_outlined,
+                            color: AppColors.statusOnHold),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(AppStrings.billingReversionPendingBanner),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: AppDimensions.sectionSpacing),
                 IgnorePointer(
                   ignoring: !canEdit,

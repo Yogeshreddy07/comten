@@ -112,8 +112,14 @@ regional `ZEPTOMAIL_API_ORIGIN`. Redeploy and verify actual receipt and code
 consumption before approving OTP testing. Existing ZeptoMail setup was reported
 inactive and requires repair. Keep placeholder recipients out of allowlists.
 
-FCM remains independently gated by `FCM_DISPATCH_ENABLED` and
-`APPROVED_FCM_USER_IDS`. This API service does not run `scripts/jobs.py`;
+Phone push notifications need `ALLOW_REAL_MESSAGES=true`,
+`FCM_DISPATCH_ENABLED=true` and either `FCM_REGISTERED_RECIPIENTS_ENABLED=true`
+(every active employee) or specific ids in `APPROVED_FCM_USER_IDS`. The API
+sends each push as soon as its notification is created, and a background
+worker in the API delivers pushes for notifications the app writes directly,
+retries failures, and sends the 9-hour checkout reminder. Notifications older
+than an hour when first picked up are never pushed, so enabling dispatch does
+not replay the backlog. This API service does not run `scripts/jobs.py`;
 queued invitation/security emails and scheduled cleanup require a separately
 configured worker/job. Password-recovery OTP mail is sent by the API itself.
 

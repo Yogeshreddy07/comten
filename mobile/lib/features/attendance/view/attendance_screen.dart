@@ -99,6 +99,17 @@ class _AttendanceScreenState extends State<AttendanceScreen>
     });
   }
 
+  /// The stored address, or the raw coordinates when no address was
+  /// resolved (e.g. records saved before addresses were captured).
+  String _formatLocation(String? name, double? latitude, double? longitude) {
+    final trimmed = LocationHelper.trimTrailingAfterCountry(name);
+    if (trimmed != null && trimmed.trim().isNotEmpty) return trimmed;
+    if (latitude == null || longitude == null) {
+      return AppStrings.attendanceLocationNameUnavailable;
+    }
+    return LocationHelper.formatCoordinates(latitude, longitude);
+  }
+
   String _formatTime(DateTime value) {
     final hour = value.hour.toString().padLeft(2, '0');
     final minute = value.minute.toString().padLeft(2, '0');
@@ -121,6 +132,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       attendanceType: type.apiValue,
       latitude: location.latitude!,
       longitude: location.longitude!,
+      locationName: location.address,
     );
 
     final result = await context.read<AttendanceViewModel>().checkIn(request);
@@ -163,6 +175,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       attendanceType: type.apiValue,
       latitude: location.latitude!,
       longitude: location.longitude!,
+      locationName: location.address,
     );
 
     final result = await context.read<AttendanceViewModel>().checkOut(request);
@@ -325,13 +338,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                 '${AppStrings.attendanceFieldCheckInTime}: '
                 '${_formatTime(today.inTime)}',
               ),
-              if (today.locationName != null) ...[
-                const SizedBox(height: 4),
-                Text(
-                  '${AppStrings.attendanceLocationLabel}: '
-                  '${LocationHelper.trimTrailingAfterCountry(today.locationName)}',
-                ),
-              ],
+              const SizedBox(height: 4),
+              Text(
+                '${AppStrings.attendanceFieldCheckInLocation}: '
+                '${_formatLocation(today.locationName, today.latitude, today.longitude)}',
+              ),
               const SizedBox(height: 4),
               Text(
                 'Date: ${DateFormatter.format(today.attendanceDate)}',
@@ -425,13 +436,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             '${AppStrings.attendanceFieldCheckInTime}: '
             '${_formatTime(today.inTime)}',
           ),
-          if (today.locationName != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              '${AppStrings.attendanceFieldCheckInLocation}: '
-              '${LocationHelper.trimTrailingAfterCountry(today.locationName)}',
-            ),
-          ],
+          const SizedBox(height: 4),
+          Text(
+            '${AppStrings.attendanceFieldCheckInLocation}: '
+            '${_formatLocation(today.locationName, today.latitude, today.longitude)}',
+          ),
           const SizedBox(height: 4),
           Text(
             '${AppStrings.attendanceFieldCheckOutTime}: '
@@ -441,13 +450,11 @@ class _AttendanceScreenState extends State<AttendanceScreen>
             const SizedBox(height: 4),
             Text('${AppStrings.attendanceFieldWorkMode}: ${checkOutType.label}'),
           ],
-          if (today.checkOutLocationName != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              '${AppStrings.attendanceFieldCheckOutLocation}: '
-              '${LocationHelper.trimTrailingAfterCountry(today.checkOutLocationName)}',
-            ),
-          ],
+          const SizedBox(height: 4),
+          Text(
+            '${AppStrings.attendanceFieldCheckOutLocation}: '
+            '${_formatLocation(today.checkOutLocationName, today.checkOutLatitude, today.checkOutLongitude)}',
+          ),
           const SizedBox(height: 4),
           Text(
             'Date: ${DateFormatter.format(today.attendanceDate)}',

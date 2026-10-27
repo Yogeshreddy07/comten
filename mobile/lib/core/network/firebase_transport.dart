@@ -140,7 +140,7 @@ class FirebaseTransport {
         }
         return null;
       }
-      final supported=['employees','projects','modules','activities','work-logs','notifications','module-change-requests','project-deactivation-requests','billing-status-change-requests'];
+      final supported=['employees','projects','modules','activities','work-logs','notifications','module-change-requests','project-deactivation-requests','billing-status-change-requests','delay-requests'];
       if(collection=='projects' && parts.last=='users') {
         final result=await pages(db.collection('employees').where('role',isEqualTo:uri.queryParameters['role']));return response(result.map((d)=>{...d.data(),'userId':d.data()['id']}).where((e)=>e['active']==true && e['deleted']!=true).toList());
       }
@@ -204,7 +204,7 @@ class FirebaseTransport {
       if(ledPicker) data=data.where((r)=>r['active']==true).toList();
       var result=ledPicker ? data : await Future.wait(data.map((r)=>decorate(collection,r,summaryOnly:true)));
       if(collection=='projects' && uri.queryParameters['hasInProgressModule']=='true') {
-        result=result.where((r)=>(r['modules'] as List).any((m)=>m['active']==true && m['status']=='IN_PROGRESS' && (m['memberIds'] as List).contains(id))).toList();
+        result=result.where((r)=>(r['modules'] as List).any((m)=>m['active']==true && (m['storedStatus']??m['status'])=='IN_PROGRESS' && (m['memberIds'] as List).contains(id))).toList();
       }
       await AccountCache.instance.put(endpoint,serial(result),revision:cacheRevision);return response(result);
     } on FirebaseAuthException catch(e) { return response(null,status:401,message:e.message??'Authentication failed'); }
@@ -212,6 +212,18 @@ class FirebaseTransport {
       on FirebaseException catch(e) { return response(null,status:e.code=='permission-denied'?403:503,message:e.code=='permission-denied'?'Permission denied':'Firebase is unavailable'); }
       on StateError catch(e) { return response(null,status:409,message:e.message); }
   }
+  /// Displayed module status: an in-progress module with no pending hours
+  /// left (worked >= estimate) reads as Completed. Derived, not stored, so
+  /// an approved estimate increase moves it back to In Progress. Mirrors the
+  /// backend's `effective_status`.
+  static String? displayStatus(Map<String,dynamic> m) {
+    if(m['active']==false) return 'INACTIVE';
+    final estimate=(m['estimatedMinutes'] as num?)?.toInt()??0;
+    final worked=(m['completedMinutes'] as num?)?.toInt()??0;
+    if(m['status']=='IN_PROGRESS' && estimate>0 && worked>=estimate) return 'COMPLETED';
+    return m['status'] as String?;
+  }
+
   Future<Map<String,dynamic>> decorate(String collection,Map<String,dynamic> row,{bool summaryOnly=false}) async {
     final result={...row,'isActive':row['active']??true};
     if(collection=='projects') {
@@ -222,7 +234,7 @@ class FirebaseTransport {
       final current=visible.where((m)=>m['active']!=false).toList();
       result['modules']=await Future.wait(visible.map((m)=>decorate('modules',m,summaryOnly:true)));
       result['moduleCount']=current.length;
-      final states=current.map((m)=>m['status']).toSet();
+      final states=current.map(displayStatus).toSet();
       result['status']=row['active']==false?'INACTIVE':states.isEmpty?'NOT_STARTED':states.length==1?states.first:'IN_PROGRESS';
       final starts=current.map((m)=>m['startDate']).whereType<String>().toList()..sort();
       final ends=current.map((m)=>m['endDate']).whereType<String>().toList()..sort();
@@ -232,7 +244,10 @@ class FirebaseTransport {
       result['pendingMinutes']=((result['estimatedMinutes'] as int)-(result['workedMinutes'] as int)).clamp(0,1<<40);
     }
       if(collection=='modules') {
-      if(row['active']==false) result['status']='INACTIVE';
+      result['status']=displayStatus(row);
+      // Timesheet eligibility keys off the stored status, so a module that has
+      // used up its hours still accepts time even while shown as Completed.
+      result['storedStatus']=row['status'];
       result['completedHours']=row['completedHours']??0;
       result['completedMinutes']=row['completedMinutes']??0;
       // Lists display names/status only. Load the full assignment graph for

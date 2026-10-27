@@ -11,6 +11,8 @@ enum NotificationType {
   projectCreated,
   projectUpdated,
   delayRequested,
+  delayApproved,
+  delayRejected,
   projectSubmittedForBilling,
   projectChangeRequested,
   projectChangeApproved,
@@ -42,6 +44,10 @@ extension NotificationTypeX on NotificationType {
         return Icons.folder_outlined;
       case NotificationType.delayRequested:
         return Icons.report_problem_outlined;
+      case NotificationType.delayApproved:
+        return Icons.check_circle_outline;
+      case NotificationType.delayRejected:
+        return Icons.cancel_outlined;
       case NotificationType.projectSubmittedForBilling:
         return Icons.receipt_long_outlined;
       case NotificationType.projectChangeRequested:
@@ -86,6 +92,10 @@ extension NotificationTypeX on NotificationType {
         return AppColors.moduleProjects;
       case NotificationType.delayRequested:
         return AppColors.statusOnHold;
+      case NotificationType.delayApproved:
+        return AppColors.statusActive;
+      case NotificationType.delayRejected:
+        return AppColors.statusCancelled;
       case NotificationType.projectSubmittedForBilling:
         return AppColors.moduleBilling;
       case NotificationType.projectChangeRequested:
@@ -132,7 +142,9 @@ extension NotificationTypeX on NotificationType {
   }
 
   bool get isDelayRequest =>
-      this == NotificationType.delayRequested;
+      this == NotificationType.delayRequested ||
+      this == NotificationType.delayApproved ||
+      this == NotificationType.delayRejected;
 
   /// Whether tapping this notification should deep-link into the Approval
   /// module's request detail (see [NotificationItem.changeRequestId]).
@@ -165,6 +177,10 @@ extension NotificationTypeX on NotificationType {
         return NotificationType.projectUpdated;
       case 'DELAY_REQUESTED':
         return NotificationType.delayRequested;
+      case 'DELAY_APPROVED':
+        return NotificationType.delayApproved;
+      case 'DELAY_REJECTED':
+        return NotificationType.delayRejected;
       case 'PROJECT_SUBMITTED_FOR_BILLING':
         return NotificationType.projectSubmittedForBilling;
       case 'PROJECT_CHANGE_REQUESTED':

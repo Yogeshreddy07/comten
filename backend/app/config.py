@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     email_registered_recipients_enabled: bool = False
     fcm_dispatch_enabled: bool = False
     approved_fcm_user_ids: str = ''
+    # Push to every active employee's registered devices, not only the allowlist.
+    fcm_registered_recipients_enabled: bool = False
     zeptomail_api_origin: str = 'https://cpaas.zoho.in'
     zeptomail_verified_domain: str = ''
     zeptomail_token: str = ''

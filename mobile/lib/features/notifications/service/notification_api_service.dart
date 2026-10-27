@@ -28,6 +28,26 @@ class NotificationApiService {
     return _apiService.post(ApiConstants.submitDelayRequest, body, token: token);
   }
 
+  Future<http.Response> getDelayRequest(String id, {String? token}) {
+    return _apiService.get(ApiConstants.delayRequestById(id), token: token);
+  }
+
+  Future<http.Response> approveDelayRequest(
+    String id,
+    Map<String, dynamic> body, {
+    String? token,
+  }) {
+    return _apiService.put(ApiConstants.approveDelayRequest(id), body, token: token);
+  }
+
+  Future<http.Response> rejectDelayRequest(
+    String id,
+    Map<String, dynamic> body, {
+    String? token,
+  }) {
+    return _apiService.put(ApiConstants.rejectDelayRequest(id), body, token: token);
+  }
+
   Future<http.Response> registerDeviceToken(String deviceToken, {String? token}) {
     return _apiService.post(
       ApiConstants.registerDeviceToken,

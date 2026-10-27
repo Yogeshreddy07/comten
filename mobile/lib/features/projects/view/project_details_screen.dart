@@ -10,7 +10,6 @@ import '../../../shared/dialogs/delete_dialog.dart';
 import '../../../shared/enums/project_status.dart';
 import '../../../shared/enums/user_role.dart';
 import '../../../shared/widgets/app_card.dart';
-import '../../../shared/widgets/files_screen.dart';
 import '../../../shared/widgets/app_empty_view.dart';
 import '../../../shared/widgets/app_loader.dart';
 import '../../auth/viewmodel/auth_viewmodel.dart';
@@ -185,13 +184,6 @@ class _ProjectDetailsScreenState extends State<ProjectDetailsScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Project Details'),
-        actions: [IconButton(tooltip: 'Attachments', icon: const Icon(Icons.attach_file), onPressed: () {
-          if (!context.canPushRoute) return;
-          Navigator.push(context, MaterialPageRoute(builder: (_) => FilesScreen(
-            targetId: widget.projectId,
-            categories: {'project_attachment':'Project attachments', if (role == UserRole.captain || role == UserRole.projectManager) 'billing_document':'Billing documents'},
-          )));
-        })],
         centerTitle: true,
       ),
       body: SafeArea(child: _buildBody(context, viewModel, canManage)),

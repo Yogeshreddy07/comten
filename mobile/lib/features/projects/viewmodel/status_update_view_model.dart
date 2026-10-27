@@ -51,7 +51,7 @@ class StatusUpdateViewModel extends ChangeNotifier {
 
   Future<ApiResult> updateWorkStage(int moduleId, String workStage) async {
     final module = _ledModules.where((m) => m.id == moduleId).firstOrNull;
-    if (workStage == 'WIP' && (module?.status == 'COMPLETED' ||
+    if (workStage == 'WIP' && (module?.lifecycleStatus == 'COMPLETED' ||
         module?.billingStatus == 'FULL_PAYMENT_RECEIVED')) {
       return ApiResult(success: false,
           message: 'This module is already completed and cannot be moved back to WIP.');

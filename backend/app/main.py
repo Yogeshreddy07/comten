@@ -33,11 +33,12 @@ from .module_validation import validate_module, MODULE_FIELDS, WORK_STAGES, STAT
 @asynccontextmanager
 async def lifespan(_app):
     from .delivery import email_worker
-    worker = asyncio.create_task(email_worker()) if settings.environment != 'local' else None
+    from .push_worker import push_worker
+    workers = [asyncio.create_task(email_worker()), asyncio.create_task(push_worker())] if settings.environment != 'local' else []
     try:
         yield
     finally:
-        if worker:
+        for worker in workers:
             worker.cancel()
             with suppress(asyncio.CancelledError): await worker
 
@@ -335,7 +336,7 @@ app.include_router(email_activation_router)
 @app.api_route('/api/{collection}/{key}/{action}',methods=['PUT','POST'])
 def privileged_action(collection: str,key: str,action: str,body: dict,user=Depends(current_user)):
     if action!='work-stage': manager(user)
-    allowed={'modules','projects','module-change-requests','project-deactivation-requests','billing-status-change-requests'}
+    allowed={'modules','projects','module-change-requests','project-deactivation-requests','billing-status-change-requests','delay-requests'}
     if collection not in allowed: raise HTTPException(404,'Not found')
     if action in ('activate','delete') and collection not in ('projects','modules'): raise HTTPException(404,'Unknown action')
     if action=='work-stage' and collection!='modules': raise HTTPException(404,'Unknown action')
@@ -366,13 +367,15 @@ def privileged_action(collection: str,key: str,action: str,body: dict,user=Depen
             if (row.get('workStage') or 'WIP')==body['workStage']: raise HTTPException(409,'This module is already in Billing.' if body['workStage']=='BILLING' else 'This module is already in WIP.')
             changes={'workStage':body['workStage']}
         elif action in ('approve','reject'):
-            require(user,'CAPTAIN')
+            # Reasons for delay are decided by either manager role; every other request needs the Captain.
+            if collection=='delay-requests': require(user,'CAPTAIN','PROJECT_CONTROLLER')
+            else: require(user,'CAPTAIN')
             if row.get('requestedById')==user['id']: raise HTTPException(403,'Cannot approve your own request')
             if row.get('approvalStatus')!='PENDING': raise HTTPException(409,'Already decided')
             reason=body.get('reason',body.get('rejectionReason',''))
             if not isinstance(reason,str) or len(reason)>1000: raise HTTPException(422,'Invalid decision reason')
             changes={'approvalStatus':'APPROVED' if action=='approve' else 'REJECTED','status':'APPROVED' if action=='approve' else 'REJECTED','approvedById':user['id'],'decidedById':user['id'],'decidedByName':user['name'],'decidedAt':datetime.now(timezone.utc).isoformat(),'rejectionReason':reason,'decisionReason':reason}
-            if action=='approve':
+            if action=='approve' and collection!='delay-requests':
                 target_collection='projects' if collection=='project-deactivation-requests' else 'modules'
                 target_id=row['projectId'] if target_collection=='projects' else row['moduleId']
                 target_ref=db.collection(target_collection).document(str(target_id))
@@ -401,6 +404,8 @@ def privileged_action(collection: str,key: str,action: str,body: dict,user=Depen
         kind=('PROJECT_CHANGE_' if collection=='module-change-requests' else 'BILLING_REVERSION_')+('APPROVED' if action=='approve' else 'REJECTED')
         link='changeRequestId' if collection=='module-change-requests' else 'billingChangeRequestId'
         notify(result['requestedById'],'Request '+action+'d',result.get('moduleName','Module request'),kind,next_id(),**{link:result['id']},moduleId=result.get('moduleId'),projectId=result['projectId'],projectName=result.get('projectName'),senderId=user['id'],senderName=user['name'])
+    if collection=='delay-requests' and action in ('approve','reject'):
+        notify(result['requestedById'],'Reason for delay '+action+('d' if action=='approve' else 'ed'),result.get('moduleName','Module'),'DELAY_'+('APPROVED' if action=='approve' else 'REJECTED'),next_id(),delayRequestId=result['id'],moduleId=result['moduleId'],moduleName=result.get('moduleName'),projectId=result['projectId'],projectName=result.get('projectName'),senderId=user['id'],senderName=user['name'])
     if collection=='modules' and action=='work-stage' and result['workStage']=='BILLING':
         for recipient in all_rows('employees'):
             if recipient.get('active') and recipient['role'] in ('CAPTAIN','PROJECT_CONTROLLER'):
@@ -457,7 +462,7 @@ app.include_router(operations_router)
 
 @app.get('/api/{collection}')
 def listing(collection: str,request: Request,user=Depends(current_user),limit: int=100,after: str|None=None):
-    if collection not in ('employees','projects','modules','activities','attendance','work-logs','notifications','module-change-requests','project-deactivation-requests','billing-status-change-requests'): raise HTTPException(404,'Not found')
+    if collection not in ('employees','projects','modules','activities','attendance','work-logs','notifications','module-change-requests','project-deactivation-requests','billing-status-change-requests','delay-requests'): raise HTTPException(404,'Not found')
     filters=[]
     if collection in ('employees','attendance','work-logs'): manager(user)
     if collection=='notifications': filters.append(('userId',user['id']))

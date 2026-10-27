@@ -451,6 +451,8 @@ class AppStrings {
   static const submitChangeRequestSuccess =
       'Your requested change has been sent to the Captain for approval.';
   static const projectPendingApprovalBadge = 'Pending Captain Approval';
+  static const billingReversionPendingBanner =
+      'A billing change for this module is already pending Captain approval.';
 
   // Project Database (Team Lead) - the Team Lead dashboard's relabeled
   // Projects tile (see dashboard_item.dart).

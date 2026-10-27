@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from .security import current_user, manager
 from .store import all_rows, get
+from .mobile_contracts import effective_status
 
 router = APIRouter(prefix='/api/reports')
 IST = timezone(timedelta(hours=5,minutes=30))
@@ -94,7 +95,7 @@ def employee_hours(logs,with_split=False,billable_only=False):
 def utilization(module,logs):
     planned=(module.get('estimatedMinutes') or 0)/60;b,n=split(logs)
     lead=get('employees',module.get('teamLeadId')) or {}
-    return {'id':module['id'],'moduleName':module['moduleName'],'teamLeadName':lead.get('name',''),'teamLeadId':module.get('teamLeadId'),'status':module.get('status','NOT_STARTED'),'startDate':module.get('startDate'),'endDate':module.get('endDate'),'plannedHours':round2(planned),'actualHours':round2(b),'remainingHours':round2(max(0,planned-b)),'progressPercentage':100 if module.get('status')=='COMPLETED' else round2(min(100,b*100/planned)) if planned else 0,'billableHours':round2(b),'nonBillableHours':round2(n),'employeeHours':employee_hours(logs,True),**{k:module.get(k) for k in ('buildingClassification','structureClassification','numberOfFloors','area')}}
+    return {'id':module['id'],'moduleName':module['moduleName'],'teamLeadName':lead.get('name',''),'teamLeadId':module.get('teamLeadId'),'status':effective_status(module) if module.get('active',True) else module.get('status','NOT_STARTED'),'startDate':module.get('startDate'),'endDate':module.get('endDate'),'plannedHours':round2(planned),'actualHours':round2(b),'remainingHours':round2(max(0,planned-b)),'progressPercentage':100 if effective_status(module)=='COMPLETED' else round2(min(100,b*100/planned)) if planned else 0,'billableHours':round2(b),'nonBillableHours':round2(n),'employeeHours':employee_hours(logs,True),**{k:module.get(k) for k in ('buildingClassification','structureClassification','numberOfFloors','area')}}
 
 
 def project_data(pid):

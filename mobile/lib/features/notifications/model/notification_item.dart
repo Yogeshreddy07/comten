@@ -2,8 +2,8 @@ import '../../../shared/enums/notification_type.dart';
 
 /// A single notification - mirrors the backend's `NotificationResponse`
 /// exactly (see `GET /api/notifications`). [reason] is only populated for
-/// `DELAY_REQUESTED` notifications - purely informational content, with no
-/// decision/approval state attached.
+/// `DELAY_REQUESTED` notifications; its approval state lives on the
+/// [delayRequestId] record.
 class NotificationItem {
   final int id;
   final String type;
@@ -28,6 +28,10 @@ class NotificationItem {
   /// Only populated for `BILLING_REVERSION_REQUESTED`/`_APPROVED`/`_REJECTED`.
   final int? billingChangeRequestId;
 
+  /// Only populated for `DELAY_REQUESTED`/`_APPROVED`/`_REJECTED` (absent on
+  /// older rows, from before delay requests needed a decision).
+  final int? delayRequestId;
+
   /// Only populated for `MODULE_MILESTONE_REACHED` - the exact threshold
   /// (30/60/90) crossed, used to pick the alert color (green/yellow/red).
   final int? milestonePercent;
@@ -50,6 +54,7 @@ class NotificationItem {
     this.reason,
     this.changeRequestId,
     this.billingChangeRequestId,
+    this.delayRequestId,
     this.milestonePercent,
     required this.isRead,
     required this.createdAt,
@@ -73,6 +78,7 @@ class NotificationItem {
       reason: json['reason'] as String?,
       changeRequestId: json['changeRequestId'] as int?,
       billingChangeRequestId: json['billingChangeRequestId'] as int?,
+      delayRequestId: json['delayRequestId'] as int?,
       milestonePercent: json['milestonePercent'] as int?,
       isRead: json['isRead'] as bool? ?? false,
       createdAt: DateTime.parse(json['createdAt'] as String).toLocal(),
@@ -95,6 +101,7 @@ class NotificationItem {
       reason: reason,
       changeRequestId: changeRequestId,
       billingChangeRequestId: billingChangeRequestId,
+      delayRequestId: delayRequestId,
       milestonePercent: milestonePercent,
       isRead: isRead ?? this.isRead,
       createdAt: createdAt,

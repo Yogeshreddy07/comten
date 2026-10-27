@@ -77,29 +77,82 @@ def test_mail_dashboard_prefix_is_applied_exactly_once(configured,monkeypatch,co
     asyncio.run(adapters.email('test@example.invalid','Synthetic','Test','<p>Test</p>'))
 
 
-def test_fcm_retry_and_deep_link_payload(configured,monkeypatch):
+@pytest.fixture
+def push_employees():
+    """Synthetic push recipients, removed afterwards so other tests' employee
+    scans never see them."""
+    from app.store import db
+    created=[]
+    def make():
+        uid=880000+adapters.secrets.randbelow(100000)
+        db.collection('employees').document(str(uid)).set({'id':uid,'active':True,'deleted':False,'role':'EMPLOYEE','name':'Push Synthetic','employeeCode':f'EMP{uid}'})
+        created.append(uid)
+        return uid
+    yield make
+    for uid in created: db.collection('employees').document(str(uid)).delete()
+
+
+def _push_fixture(monkeypatch, uid, allowlist='', registered=False, created=None):
+    from datetime import datetime, timezone
+    from app.store import db
     monkeypatch.setattr(adapters.settings,'environment','development')
+    monkeypatch.setattr(adapters.settings,'allow_real_messages',True)
     monkeypatch.setattr(adapters.settings,'fcm_dispatch_enabled',True)
-    monkeypatch.setattr(adapters.settings,'approved_fcm_user_ids','4')
-    notifications=[{'id':1,'userId':4,'type':'TIMESHEET_APPROVED','title':'Synthetic','message':'Test','moduleId':101,'projectId':100}]
-    monkeypatch.setattr(adapters,'all_rows',lambda name,*args: notifications if name=='notifications' else [{'id':'token-doc','token':'synthetic'}])
-    updates=[]
-    class Document:
-        def update(self,values): updates.append(values)
-    class Collection:
-        def document(self,key): return Document()
-    class Database:
-        def collection(self,name): return Collection()
-    monkeypatch.setattr(adapters,'db',Database())
+    monkeypatch.setattr(adapters.settings,'approved_fcm_user_ids',allowlist)
+    monkeypatch.setattr(adapters.settings,'fcm_registered_recipients_enabled',registered)
+    key=adapters.secrets.randbelow(10**12)+10**15
+    db.collection('device-tokens').document(f'push-test-{key}').set({'userId':uid,'token':f'synthetic-{key}'})
+    db.collection('notifications').document(str(key)).set({'id':key,'userId':uid,'type':'TIMESHEET_APPROVED','title':'Synthetic','message':'Test','moduleId':101,'projectId':100,'read':False,'pushPending':True,'createdAt':(created or datetime.now(timezone.utc)).isoformat()})
+    return key, db.collection('notifications').document(str(key))
+
+
+def test_fcm_retry_and_deep_link_payload(monkeypatch,push_employees):
+    uid=push_employees()
+    key,ref=_push_fixture(monkeypatch,uid,allowlist=str(uid))
     def unavailable(message): raise RuntimeError('provider outage')
     monkeypatch.setattr(adapters.messaging,'send',unavailable)
-    adapters.dispatch_pending()
-    assert updates[-1]=={'pushPending':True}
+    adapters.deliver_push(key)
+    assert ref.get().to_dict()['pushPending'] is True
     sent=[]
     monkeypatch.setattr(adapters.messaging,'send',lambda message:sent.append(message))
-    adapters.dispatch_pending()
-    assert updates[-1]=={'pushPending':False}
-    assert sent[0].data['moduleId']=='101' and sent[0].data['notificationId']=='1'
+    adapters.deliver_push(key)
+    assert ref.get().to_dict()['pushPending'] is False
+    assert sent[0].data['moduleId']=='101' and sent[0].data['notificationId']==str(key)
+    assert sent[0].android.priority=='high'
+    adapters.deliver_push(key)
+    assert len(sent)==1
+
+
+def test_fcm_reaches_registered_employees_and_skips_backlog(monkeypatch,push_employees):
+    from datetime import datetime, timedelta, timezone
+    sent=[]
+    monkeypatch.setattr(adapters.messaging,'send',lambda message:sent.append(message))
+    key,ref=_push_fixture(monkeypatch,push_employees())
+    adapters.deliver_push(key)
+    assert not sent and ref.get().to_dict()['pushSkipped']=='not-approved'
+    key,ref=_push_fixture(monkeypatch,push_employees(),registered=True)
+    adapters.deliver_push(key)
+    assert len(sent)==1 and ref.get().to_dict()['pushPending'] is False
+    key,ref=_push_fixture(monkeypatch,push_employees(),registered=True,created=datetime.now(timezone.utc)-timedelta(hours=2))
+    adapters.deliver_push(key)
+    assert len(sent)==1 and ref.get().to_dict()['pushSkipped']=='stale'
+
+
+def test_checkout_reminder_once_after_nine_hours(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from app import push_worker
+    from app.store import db
+    monkeypatch.setattr(adapters.settings,'environment','local')
+    now=datetime.now(timezone.utc)
+    day=now.astimezone(push_worker.IST).date().isoformat()
+    uid=870000+adapters.secrets.randbelow(10000)
+    late,fresh,done=(uid*100000000+n for n in (1,2,3))
+    for aid,hours,out in ((late,10,None),(fresh,2,None),(done,10,now)):
+        db.collection('attendance').document(str(aid)).set({'id':aid,'employeeId':uid,'attendanceDate':day,'inTime':now-timedelta(hours=hours),'outTime':out})
+    assert push_worker.checkout_reminders(now)==[late]
+    assert push_worker.checkout_reminders(now)==[]
+    reminders=[n.to_dict() for n in db.collection('notifications').where('userId','==',uid).stream()]
+    assert [r['type'] for r in reminders]==['CHECKOUT_REMINDER']
 
 
 @pytest.mark.parametrize('raw,expected',[('+91 90000-00000','919000000000'),('9000000000','919000000000'),('+14155552671','14155552671')])

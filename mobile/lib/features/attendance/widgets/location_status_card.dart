@@ -53,20 +53,39 @@ class LocationStatusCard extends StatelessWidget {
 
     final current = result;
     if (current != null && current.isSuccess) {
-      // The place name is resolved server-side once these coordinates reach the backend (see
-      // GeocodingService) - not available yet to show here, so this is just a captured/not
-      // state, same as the loading/failure branches below.
-      return const AppCard(
+      // The exact spot this check-in/check-out will record: the resolved
+      // address, or the raw coordinates when no address could be resolved.
+      final coordinates = LocationHelper.formatCoordinates(
+        current.latitude!,
+        current.longitude!,
+      );
+      return AppCard(
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(Icons.location_on, color: AppColors.statusActive),
-            SizedBox(width: 14),
+            const Icon(Icons.location_on, color: AppColors.statusActive),
+            const SizedBox(width: 14),
             Expanded(
-              child: Text(
-                AppStrings.attendanceLocationCaptured,
-                style: TextStyle(fontWeight: FontWeight.w600),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    AppStrings.attendanceLocationCaptured,
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(current.address ?? coordinates),
+                  if (current.address != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      coordinates,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondaryFor(context),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ],

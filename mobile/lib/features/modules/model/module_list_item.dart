@@ -16,6 +16,13 @@ class ModuleListItem {
   final int? completedHours;
   final String status;
 
+  /// The status as stored, before [status] is shown as Completed for a module
+  /// with no pending hours left - what timesheet eligibility and the WIP
+  /// guard go by.
+  final String? storedStatus;
+
+  String get lifecycleStatus => storedStatus ?? status;
+
   /// Team Lead-controlled WIP/Billing toggle (see `ProjectWorkStage`) -
   /// distinct from [status], the module lifecycle status.
   final String? workStage;
@@ -36,6 +43,7 @@ class ModuleListItem {
     this.estimatedMinutes,
     this.completedHours,
     required this.status,
+    this.storedStatus,
     this.workStage,
     this.billingStatus,
   });
@@ -58,6 +66,7 @@ class ModuleListItem {
       estimatedMinutes: json['estimatedMinutes'] as int?,
       completedHours: json['completedHours'] as int?,
       status: json['status'] as String? ?? '',
+      storedStatus: json['storedStatus'] as String?,
       workStage: json['workStage'] as String?,
       billingStatus: json['billingStatus'] as String?,
     );
@@ -77,6 +86,7 @@ class ModuleListItem {
       estimatedMinutes: estimatedMinutes,
       completedHours: completedHours,
       status: status ?? this.status,
+      storedStatus: status ?? storedStatus,
       workStage: workStage ?? this.workStage,
       billingStatus: billingStatus,
     );

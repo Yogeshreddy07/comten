@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 
 enum LocationFailure {
@@ -14,19 +15,34 @@ enum LocationFailure {
 /// show a specific message (e.g. "enable location services" vs. "grant
 /// permission") rather than one generic error.
 ///
-/// The place name for these coordinates (e.g. "MG Road, Bengaluru") is no
-/// longer resolved here - it's reverse-geocoded server-side (via Google's
-/// Geocoding API, see `GeocodingService`) once the coordinates reach the
-/// backend on check-in/check-out, not shown live on this screen.
+/// [address] is the place name for these coordinates (e.g. "12, MG Road,
+/// Bengaluru, Karnataka 560001, India"), reverse-geocoded on the device via
+/// the platform geocoder (Google's on Android). It's null when the lookup
+/// fails (offline, no geocoder) - the coordinates alone are still valid for
+/// check-in/check-out.
 class LocationResult {
   final double? latitude;
   final double? longitude;
+  final String? address;
   final LocationFailure? failure;
 
-  const LocationResult._({this.latitude, this.longitude, this.failure});
+  const LocationResult._({
+    this.latitude,
+    this.longitude,
+    this.address,
+    this.failure,
+  });
 
-  factory LocationResult.success(double latitude, double longitude) =>
-      LocationResult._(latitude: latitude, longitude: longitude);
+  factory LocationResult.success(
+    double latitude,
+    double longitude, {
+    String? address,
+  }) =>
+      LocationResult._(
+        latitude: latitude,
+        longitude: longitude,
+        address: address,
+      );
 
   factory LocationResult.failure(LocationFailure failure) =>
       LocationResult._(failure: failure);
@@ -62,11 +78,68 @@ class LocationHelper {
       }
 
       final position = await _acquirePrecisePosition();
-      return LocationResult.success(position.latitude, position.longitude);
+      final address =
+          await _resolveAddress(position.latitude, position.longitude);
+      return LocationResult.success(
+        position.latitude,
+        position.longitude,
+        address: address,
+      );
     } catch (e) {
       return LocationResult.failure(LocationFailure.failed);
     }
   }
+
+  /// Reverse-geocodes [latitude]/[longitude] into a full street address.
+  /// Never throws - an address is a nice-to-have on top of the coordinates,
+  /// so a slow or failed lookup must not block check-in/check-out.
+  static Future<String?> _resolveAddress(
+    double latitude,
+    double longitude,
+  ) async {
+    try {
+      final placemarks = await Geocoding()
+          .placemarkFromCoordinates(latitude, longitude)
+          .timeout(const Duration(seconds: 8));
+      if (placemarks.isEmpty) return null;
+      return formatPlacemark(placemarks.first);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// On Android [Placemark.street] is the geocoder's full formatted address
+  /// line (house number through country), the most precise form available;
+  /// otherwise (iOS, or a bare street) the address is assembled from parts.
+  static String? formatPlacemark(Placemark placemark) {
+    final street = placemark.street?.trim();
+    if (street != null && street.contains(',')) {
+      return trimTrailingAfterCountry(street);
+    }
+
+    final parts = <String>[];
+    void add(String? value) {
+      final trimmed = value?.trim();
+      if (trimmed == null || trimmed.isEmpty) return;
+      if (parts.any((p) => p.toLowerCase() == trimmed.toLowerCase())) return;
+      parts.add(trimmed);
+    }
+
+    add(street);
+    add(placemark.subLocality);
+    add(placemark.locality);
+    add(placemark.subAdministrativeArea);
+    add([placemark.administrativeArea, placemark.postalCode]
+        .where((v) => v != null && v.trim().isNotEmpty)
+        .join(' '));
+    add(placemark.country);
+    return parts.isEmpty ? null : parts.join(', ');
+  }
+
+  /// "lat, lng" to 6 decimal places (~0.1m) - shown when no address could be
+  /// resolved, so the recorded location is never just hidden.
+  static String formatCoordinates(double latitude, double longitude) =>
+      '${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}';
 
   /// Whether [failure] can only be fixed outside the app - the OS won't show
   /// the permission prompt again once it's permanently denied, and location

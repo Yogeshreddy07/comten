@@ -5,10 +5,15 @@ class CheckInRequest {
   final double latitude;
   final double longitude;
 
+  /// Reverse-geocoded address for [latitude]/[longitude]; omitted when the
+  /// device couldn't resolve one.
+  final String? locationName;
+
   const CheckInRequest({
     required this.attendanceType,
     required this.latitude,
     required this.longitude,
+    this.locationName,
   });
 
   Map<String, dynamic> toJson() {
@@ -16,6 +21,7 @@ class CheckInRequest {
       'attendanceType': attendanceType,
       'latitude': latitude,
       'longitude': longitude,
+      if (locationName != null) 'locationName': locationName,
     };
   }
 }

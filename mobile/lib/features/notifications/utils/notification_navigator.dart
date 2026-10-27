@@ -262,6 +262,8 @@ class NotificationNavigator {
       // `openNotification` above, both of which fetch the full object first
       // and bypass this fallback); anything unrecognized also lands here.
       case NotificationType.delayRequested:
+      case NotificationType.delayApproved:
+      case NotificationType.delayRejected:
       case NotificationType.projectChangeRequested:
       case NotificationType.projectChangeApproved:
       case NotificationType.projectChangeRejected:

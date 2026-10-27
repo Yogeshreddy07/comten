@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../../../core/utils/preference_util.dart';
 import '../../../core/utils/secure_storage_service.dart';
 import '../../auth/model/api_result.dart';
+import '../model/delay_request.dart';
 import '../model/notification_item.dart';
 import '../model/submit_delay_request.dart';
 import '../service/notification_api_service.dart';
@@ -102,6 +103,39 @@ class NotificationRepository {
       isSuccess: (code) => code == 200 || code == 201,
       successMessage: "Reason for delay submitted successfully",
       mapData: (data) => NotificationItem.fromJson(data as Map<String, dynamic>),
+    );
+  }
+
+  /// `GET /delay-requests/{id}` - the request's current approval state.
+  Future<ApiResult> getDelayRequest(int id) async {
+    final token = await _currentToken();
+    return _request(
+      () => _apiService.getDelayRequest(id.toString(), token: token),
+      isSuccess: (code) => code == 200,
+      successMessage: "Delay request loaded",
+      mapData: (data) => DelayRequest.fromJson(data as Map<String, dynamic>),
+    );
+  }
+
+  /// `PUT /delay-requests/{id}/approve` (Captain / Project Controller).
+  Future<ApiResult> approveDelayRequest(int id, String reason) async {
+    final token = await _currentToken();
+    return _request(
+      () => _apiService.approveDelayRequest(id.toString(), {'reason': reason}, token: token),
+      isSuccess: (code) => code == 200,
+      successMessage: "Reason for delay approved",
+      mapData: (data) => DelayRequest.fromJson(data as Map<String, dynamic>),
+    );
+  }
+
+  /// `PUT /delay-requests/{id}/reject` (Captain / Project Controller).
+  Future<ApiResult> rejectDelayRequest(int id, String reason) async {
+    final token = await _currentToken();
+    return _request(
+      () => _apiService.rejectDelayRequest(id.toString(), {'reason': reason}, token: token),
+      isSuccess: (code) => code == 200,
+      successMessage: "Reason for delay rejected",
+      mapData: (data) => DelayRequest.fromJson(data as Map<String, dynamic>),
     );
   }
 

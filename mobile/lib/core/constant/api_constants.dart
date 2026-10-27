@@ -126,6 +126,9 @@ class ApiConstants {
   static const notificationsUnreadCount = "/notifications/unread-count";
   static String markNotificationRead(String id) => "/notifications/$id/read";
   static const submitDelayRequest = "/notifications/delay-requests";
+  static String delayRequestById(String id) => "/delay-requests/$id";
+  static String approveDelayRequest(String id) => "/delay-requests/$id/approve";
+  static String rejectDelayRequest(String id) => "/delay-requests/$id/reject";
   static const registerDeviceToken = "/notifications/device-tokens";
   static const unregisterDeviceToken =
       "/notifications/device-tokens/unregister";

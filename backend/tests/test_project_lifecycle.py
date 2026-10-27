@@ -205,3 +205,15 @@ def test_staff_only_directory_excludes_managers_and_preserves_controller_directo
     assert {row['role'] for row in staff} <= {'EMPLOYEE','TEAM_LEADER'}
     controllers=client.get('/api/employees?role=PROJECT_CONTROLLER&limit=200').json()['data']
     assert lead+40 in {row['id'] for row in controllers}
+
+
+def test_module_with_no_pending_hours_reads_completed():
+    from app.mobile_contracts import effective_status
+    base={'status':'IN_PROGRESS','active':True,'estimatedMinutes':60}
+    assert effective_status(base|{'completedMinutes':59})=='IN_PROGRESS'
+    assert effective_status(base|{'completedMinutes':60})=='COMPLETED'
+    assert effective_status(base|{'completedMinutes':65})=='COMPLETED'
+    # No estimate, on hold, or inactive modules are never inferred complete.
+    assert effective_status(base|{'estimatedMinutes':0,'completedMinutes':65})=='IN_PROGRESS'
+    assert effective_status(base|{'status':'ON_HOLD','completedMinutes':65})=='ON_HOLD'
+    assert effective_status(base|{'active':False,'completedMinutes':65})=='INACTIVE'

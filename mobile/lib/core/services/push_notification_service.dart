@@ -285,7 +285,7 @@ class PushNotificationService {
     // payload alone only carries type/id/projectId. Reuse `markAsRead`
     // (already the right call to make on open) since it returns the full
     // notification.
-    if (type == NotificationType.delayRequested) {
+    if (type.isDelayRequest) {
       final notificationIdRaw = data['notificationId'] as String?;
       final notificationId =
           notificationIdRaw != null ? int.tryParse(notificationIdRaw) : null;

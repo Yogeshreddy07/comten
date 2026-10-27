@@ -1,10 +1,11 @@
 """Provider secrets and dispatch live exclusively on the trusted server."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 import secrets
 import logging
+import threading
 import httpx
-from firebase_admin import messaging
+from firebase_admin import firestore, messaging
 from fastapi import HTTPException
 from .config import settings
 from .store import db, all_rows
@@ -208,23 +209,100 @@ async def verify_msg91(phone: str, otp: str, request_id: str):
 def notify(uid: int,title: str,body: str,kind: str,key: int,**details):
     record={**details,'id':key,'userId':uid,'title':title,'message':body,'type':kind,'read':False,'pushPending':True,'createdAt':datetime.now(timezone.utc).isoformat()}
     db.collection('notifications').document(str(key)).set(record)
+    # Push straight away rather than waiting for the next worker pass; the
+    # record stays pushPending until delivered, so the worker still retries.
+    if push_enabled():
+        threading.Thread(target=deliver_push,args=(key,),daemon=True).start()
     return record
 
 
+# A push older than this when first seen is history, not news - never send it
+# (e.g. the backlog queued while push dispatch was switched off).
+PUSH_MAX_AGE = timedelta(hours=1)
+# A delivery claim older than this is from a crashed/stalled sender and may be retaken.
+PUSH_CLAIM_TTL = timedelta(minutes=2)
+
+
+def push_enabled():
+    return settings.environment!='local' and settings.allow_real_messages and settings.fcm_dispatch_enabled
+
+
+def push_recipient_allowed(uid):
+    """Every active employee once registered-recipient push is on; otherwise
+    only the explicit APPROVED_FCM_USER_IDS test allowlist."""
+    if str(uid) in {v.strip() for v in settings.approved_fcm_user_ids.split(',') if v.strip()}:
+        return True
+    if not settings.fcm_registered_recipients_enabled:
+        return False
+    person=db.collection('employees').document(str(uid)).get().to_dict()
+    return bool(person and person.get('active') and not person.get('deleted'))
+
+
+def _created_at(item):
+    created=item.get('createdAt')
+    if isinstance(created,str):
+        try: created=datetime.fromisoformat(created.replace('Z','+00:00'))
+        except ValueError: return None
+    return created if isinstance(created,datetime) else None
+
+
+def _claim_push(ref):
+    """Atomically take the right to send this push, so the immediate sender,
+    the worker and other replicas never deliver the same notification twice."""
+    @firestore.transactional
+    def claim(tx):
+        snap=ref.get(transaction=tx)
+        item=snap.to_dict() if snap.exists else None
+        if not item or not item.get('pushPending'): return None
+        claimed=item.get('pushClaimedAt')
+        now=datetime.now(timezone.utc)
+        if isinstance(claimed,datetime) and now-claimed<PUSH_CLAIM_TTL: return None
+        tx.update(ref,{'pushClaimedAt':now})
+        return item
+    return claim(db.transaction())
+
+
+def _send_push(item):
+    """Send to every device the recipient has registered; True if any send
+    failed transiently (so the push stays pending for a retry)."""
+    failed=False
+    payload={k:str(item[k]) for k in ('type','projectId','moduleId','milestonePercent') if item.get(k) is not None}
+    payload['notificationId']=str(item['id'])
+    android=messaging.AndroidConfig(priority='high',notification=messaging.AndroidNotification(channel_id='comten_notifications'))
+    for token in all_rows('device-tokens',[('userId',item['userId'])]):
+        try:
+            messaging.send(messaging.Message(token=token['token'],notification=messaging.Notification(title=item['title'],body=item['message']),data=payload,android=android))
+        except messaging.UnregisteredError:
+            # Delete only this registered document; never another account's token.
+            db.collection('device-tokens').document(str(token['id'])).delete()
+        except Exception:
+            failed=True
+            logging.getLogger('crompton').warning('Push delivery failed; will retry')
+    return failed
+
+
+def deliver_push(key):
+    """Deliver one pending notification as a phone push. Never raises."""
+    try:
+        ref=db.collection('notifications').document(str(key))
+        item=_claim_push(ref)
+        if item is None: return
+        created=_created_at(item)
+        if created is None or datetime.now(timezone.utc)-created>PUSH_MAX_AGE:
+            ref.update({'pushPending':False,'pushClaimedAt':firestore.DELETE_FIELD,'pushSkipped':'stale'})
+            return
+        if not push_recipient_allowed(item['userId']):
+            ref.update({'pushPending':False,'pushClaimedAt':firestore.DELETE_FIELD,'pushSkipped':'not-approved'})
+            return
+        failed=_send_push(item)
+        ref.update({'pushPending':failed,'pushClaimedAt':firestore.DELETE_FIELD})
+    except Exception:
+        logging.getLogger('crompton').warning('Push dispatch error; will retry')
+
+
 def dispatch_pending():
-    """Retry transient failures on the next scheduler run; never fail a user write."""
-    if settings.environment=='local' or not settings.allow_real_messages or not settings.fcm_dispatch_enabled: return
-    for item in all_rows('notifications',[('pushPending',True)]):
-        if str(item['userId']) not in {v.strip() for v in settings.approved_fcm_user_ids.split(',')}: continue
-        failed=False
-        payload={k:str(item[k]) for k in ('type','projectId','moduleId','milestonePercent') if item.get(k) is not None}
-        payload['notificationId']=str(item['id'])
-        for token in all_rows('device-tokens',[('userId',item['userId'])]):
-            try:
-                messaging.send(messaging.Message(token=token['token'],notification=messaging.Notification(title=item['title'],body=item['message']),data=payload))
-            except messaging.UnregisteredError:
-                # Delete only this registered document; never another account's token.
-                db.collection('device-tokens').document(str(token['id'])).delete()
-            except Exception:
-                failed=True
-        db.collection('notifications').document(str(item['id'])).update({'pushPending':failed})
+    """Deliver every pending push - notifications written directly by the
+    mobile app (e.g. Timesheet submitted) and retries of failed sends."""
+    if not push_enabled(): return
+    for item in list(all_rows('notifications',[('pushPending',True)])):
+        deliver_push(item['id'])

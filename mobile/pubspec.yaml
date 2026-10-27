@@ -58,6 +58,7 @@ dependencies:
   flutter_svg: ^2.0.10+1
   file_picker: ^11.0.3
   dio: ^5.11.1
+  geocoding: ^5.0.0
 
 dev_dependencies:
   integration_test:
