@@ -1,3 +1,4 @@
+import 'performance_trace.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dio/dio.dart';
@@ -13,7 +14,7 @@ class FileService {
         _objects = objects ?? Dio(BaseOptions(connectTimeout: const Duration(seconds: 10), receiveTimeout: const Duration(seconds: 30), sendTimeout: const Duration(seconds: 60)));
 
   dynamic _decode(dynamic response) {
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final body = PerformanceTrace.measureSync('client.file_decode', () => jsonDecode(response.body)) as Map<String, dynamic>;
     if (response.statusCode < 200 || response.statusCode >= 300 || body['success'] != true) {
       throw Exception(body['message'] ?? body['detail'] ?? 'File operation failed');
     }
@@ -31,7 +32,8 @@ class FileService {
     return result;
   }
 
-  Future<void> upload(String category, int targetId, String name, String type, Uint8List bytes, void Function(int, int) progress) async {
+  Future<void> upload(String category, int targetId, String name, String type, Uint8List bytes, void Function(int, int) progress) => PerformanceTrace.measure('file.upload', () => _upload(category,targetId,name,type,bytes,progress));
+  Future<void> _upload(String category, int targetId, String name, String type, Uint8List bytes, void Function(int, int) progress) async {
     if (bytes.isEmpty || bytes.length > 10 * 1024 * 1024) throw Exception('Choose a file up to 10 MB');
     final grant = _decode(await _api.post('/files/authorize-upload', {'category': category, 'targetId': targetId, 'name': name, 'contentType': type, 'size': bytes.length})) as Map<String, dynamic>;
     final id = grant['id'] as String;
@@ -52,7 +54,8 @@ class FileService {
     }
   }
 
-  Future<Uint8List> download(String id) async {
+  Future<Uint8List> download(String id) => PerformanceTrace.measure('file.download', () => _download(id));
+  Future<Uint8List> _download(String id) async {
     final grant = _decode(await _api.get('/files/$id/download')) as Map<String, dynamic>;
     try {
       final response = await _objects.get<List<int>>(grant['url'] as String,

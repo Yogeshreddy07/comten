@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../../shared/constants/app_strings.dart';
 
@@ -7,7 +7,7 @@ import '../../../shared/constants/app_strings.dart';
 /// time-of-day greeting is the only thing computed here. Shared by every
 /// role dashboard via [RoleDashboardScaffold]; each role's own module list
 /// is supplied separately (see `UserRole.dashboardModules`).
-class DashboardViewModel extends ChangeNotifier {
+class DashboardViewModel extends PerformanceNotifier {
   String get greeting {
     final hour = DateTime.now().hour;
     if (hour < 12) return AppStrings.dashboardGreetingMorning;

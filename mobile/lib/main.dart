@@ -1,3 +1,4 @@
+import 'core/services/performance_trace.dart';
 import 'core/services/firebase_environment.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -120,7 +121,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Comten PMS',
       navigatorKey: PushNotificationService.instance.navigatorKey,
-      navigatorObservers: [SnackbarDismissingObserver()],
+      navigatorObservers: [SnackbarDismissingObserver(), PerformanceNavigationObserver()],
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
 

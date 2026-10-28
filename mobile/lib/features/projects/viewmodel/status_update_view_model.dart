@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../../modules/model/module_list_item.dart';
@@ -14,7 +14,7 @@ enum StatusUpdateLoadState { initial, loading, success, error }
 /// work stage (see `ModuleServiceImpl#updateWorkStage` - a Completed module
 /// can never move straight back to WIP, unlike Not Started/In Progress
 /// ones).
-class StatusUpdateViewModel extends ChangeNotifier {
+class StatusUpdateViewModel extends PerformanceNotifier {
   final ModuleRepository _repository;
 
   StatusUpdateViewModel({required ModuleRepository repository})

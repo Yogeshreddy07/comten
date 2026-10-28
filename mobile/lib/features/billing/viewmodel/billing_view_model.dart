@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/billing_entry.dart';
@@ -9,7 +9,7 @@ enum BillingLoadState { initial, loading, success, error }
 
 /// Owns Billing Management state (Captain / Project Controller only) -
 /// every project's billing status, and updating it.
-class BillingViewModel extends ChangeNotifier {
+class BillingViewModel extends PerformanceNotifier {
   final BillingRepository _repository;
 
   BillingViewModel({required BillingRepository repository})

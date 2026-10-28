@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../../modules/model/module_list_item.dart';
@@ -15,7 +15,7 @@ enum ReasonForDelayLoadState { initial, loading, success, error }
 /// Project Controller. Kept separate from [StatusUpdateViewModel] (a
 /// different Team Lead screen with its own, differently-filtered led-modules
 /// list) since the two screens have no other state in common.
-class ReasonForDelayViewModel extends ChangeNotifier {
+class ReasonForDelayViewModel extends PerformanceNotifier {
   final ModuleRepository _moduleRepository;
   final NotificationRepository _notificationRepository;
 

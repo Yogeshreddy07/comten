@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/module_list_item.dart';
@@ -8,7 +8,7 @@ import '../repository/module_repository.dart';
 
 enum ModuleLoadState { initial, loading, success, error }
 
-class ModuleViewModel extends ChangeNotifier {
+class ModuleViewModel extends PerformanceNotifier {
   final ModuleRepository _repository;
 
   ModuleViewModel({required ModuleRepository repository})

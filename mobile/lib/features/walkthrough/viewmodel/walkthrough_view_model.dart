@@ -1,3 +1,4 @@
+import '../../../core/services/performance_trace.dart';
 import 'package:flutter/material.dart';
 
 import '../../../core/utils/preference_util.dart';
@@ -8,7 +9,7 @@ import '../utils/walkthrough_content.dart';
 /// Owns the walkthrough's page state (current page, PageController) and
 /// persisting completion. Scoped to a single [WalkthroughScreen] instance
 /// (not provided app-wide) - nothing else needs this state.
-class WalkthroughViewModel extends ChangeNotifier {
+class WalkthroughViewModel extends PerformanceNotifier {
   final String employeeCode;
   final List<WalkthroughStep> steps;
   final PageController pageController = PageController();

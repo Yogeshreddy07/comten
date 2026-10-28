@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../model/team_attendance_entry.dart';
 import '../repository/attendance_repository.dart';
@@ -10,7 +10,7 @@ enum AttendanceTeamLoadState { initial, loading, success, error }
 /// date (defaults to today, see [selectedDate]). Kept separate from
 /// [AttendanceViewModel] (the Employee's own check-in/check-out state)
 /// since the two roles never share a screen.
-class AttendanceTeamViewModel extends ChangeNotifier {
+class AttendanceTeamViewModel extends PerformanceNotifier {
   final AttendanceRepository _repository;
 
   AttendanceTeamViewModel({required AttendanceRepository repository})

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/work_log.dart';
@@ -10,7 +10,7 @@ enum WorkLogApprovalLoadState { initial, loading, success, error }
 /// every entry submitted against a project they lead and approving/
 /// rejecting them. Kept separate from [WorkLogViewModel] (the Employee "my
 /// timesheets" state) since the two roles never share a screen.
-class WorkLogApprovalViewModel extends ChangeNotifier {
+class WorkLogApprovalViewModel extends PerformanceNotifier {
   final WorkLogRepository _repository;
 
   WorkLogApprovalViewModel({required WorkLogRepository repository})

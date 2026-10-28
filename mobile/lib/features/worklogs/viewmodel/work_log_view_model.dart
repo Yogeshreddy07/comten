@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/create_work_log_request.dart';
@@ -12,7 +12,7 @@ enum WorkLogLoadState { initial, loading, success, error }
 /// submissions and submitting new ones. The approval queue (Team Leader) is
 /// a separate concern - see [WorkLogApprovalViewModel] - since the two
 /// roles never share a screen.
-class WorkLogViewModel extends ChangeNotifier {
+class WorkLogViewModel extends PerformanceNotifier {
   final WorkLogRepository _repository;
 
   WorkLogViewModel({required WorkLogRepository repository})

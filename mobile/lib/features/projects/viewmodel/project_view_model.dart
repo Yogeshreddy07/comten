@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 import 'dart:async';
 
 import '../../../shared/enums/project_status.dart';
@@ -10,7 +10,7 @@ import '../repository/project_repository.dart';
 
 enum ProjectLoadState { initial, loading, success, error }
 
-class ProjectViewModel extends ChangeNotifier {
+class ProjectViewModel extends PerformanceNotifier {
   final ProjectRepository _repository;
   int _generation = 0;
 

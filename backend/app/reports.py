@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from .security import current_user, manager
-from .store import all_rows, get
+from .store import all_rows, get, get_many
 from .mobile_contracts import effective_status
 
 router = APIRouter(prefix='/api/reports')
@@ -85,8 +85,11 @@ def employee_hours(logs,with_split=False,billable_only=False):
     groups=defaultdict(list)
     for l in logs: groups[l['employeeId']].append(l)
     result=[]
+    records=get_many([('employees', uid) for uid in groups], fields=['id','employeeCode','name','role'])
     for uid,group in groups.items():
-        e=employee(uid);b,n=split(group)
+        e=records.get(('employees',str(uid)))
+        if not e: raise HTTPException(404,'Employee not found')
+        b,n=split(group)
         if billable_only and b<=0: continue
         result.append({'userId':uid,'employeeCode':e['employeeCode'],'name':e['name'],**({'billableHours':round2(b),'nonBillableHours':round2(n)} if with_split else {'hours':round2(b if billable_only else b+n)})})
     return sorted(result,key=lambda e:-(e.get('hours',0) if not with_split else e['billableHours']+e['nonBillableHours']))

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/activity.dart';
@@ -9,7 +9,7 @@ enum ActivityLoadState { initial, loading, success, error }
 /// Owns the Activities master-list state - shared by the Project
 /// Controller's Activities screen and the Project create/edit Billable/
 /// Non-Billable pickers (all read from the same [activities] list).
-class ActivityViewModel extends ChangeNotifier {
+class ActivityViewModel extends PerformanceNotifier {
   final ActivityRepository _repository;
 
   ActivityViewModel({required ActivityRepository repository})

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../../shared/enums/user_role.dart';
 import '../../auth/model/api_result.dart';
@@ -9,7 +9,7 @@ import '../repository/employee_repository.dart';
 
 enum EmployeeLoadState { initial, loading, success, error }
 
-class EmployeeViewModel extends ChangeNotifier {
+class EmployeeViewModel extends PerformanceNotifier {
   final EmployeeRepository _repository;
 
   EmployeeViewModel({required EmployeeRepository repository})

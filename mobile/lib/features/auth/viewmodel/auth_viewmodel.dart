@@ -1,6 +1,6 @@
+import '../../../core/services/performance_trace.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../../core/services/account_cache.dart';
-import 'package:flutter/material.dart';
 import '../../../core/services/phone_verification_channel.dart';
 import '../../../core/utils/biometric_helper.dart';
 import '../../../core/utils/secure_storage_service.dart';
@@ -11,7 +11,7 @@ import '../model/api_result.dart';
 import '../repository/auth_repository.dart';
 import '../model/reset_password_session.dart';
 
-class AuthViewModel extends ChangeNotifier {
+class AuthViewModel extends PerformanceNotifier {
   final AuthRepository _repository;
   final SecureStorageService _secureStorage;
   final PhoneVerificationChannel _phoneVerificationChannel;

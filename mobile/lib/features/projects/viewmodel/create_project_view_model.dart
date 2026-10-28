@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../../shared/enums/user_role.dart';
 import '../../activities/model/activity.dart';
@@ -34,7 +34,7 @@ import '../utils/project_validator.dart';
 /// subset. Selecting a parent still clears whatever was chosen at the
 /// level(s) below it, matching the required UX even though the returned
 /// list itself isn't parent-scoped yet.
-class CreateProjectViewModel extends ChangeNotifier {
+class CreateProjectViewModel extends PerformanceNotifier {
   final ProjectRepository _projectRepository;
   final ModuleRepository _moduleRepository;
 

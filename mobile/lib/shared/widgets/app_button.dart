@@ -1,3 +1,4 @@
+import '../../core/services/performance_trace.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/theme/app_text_styles.dart';
@@ -51,7 +52,9 @@ class AppButton extends StatelessWidget {
         width: double.infinity,
         height: 55,
         child: OutlinedButton(
-          onPressed: isLoading ? null : onPressed,
+          onPressed: isLoading || onPressed == null
+              ? null
+              : () => PerformanceTrace.tap(onPressed!),
           style: OutlinedButton.styleFrom(
             side: BorderSide(color: theme.primaryColor),
             shape: RoundedRectangleBorder(
@@ -67,7 +70,9 @@ class AppButton extends StatelessWidget {
       width: double.infinity,
       height: 55,
       child: ElevatedButton(
-        onPressed: isLoading ? null : onPressed,
+        onPressed: isLoading || onPressed == null
+            ? null
+            : () => PerformanceTrace.tap(onPressed!),
         style: ElevatedButton.styleFrom(
           backgroundColor: backgroundColor,
           foregroundColor: foregroundColor,

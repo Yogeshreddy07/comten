@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../model/notification_item.dart';
 import '../repository/notification_repository.dart';
@@ -9,7 +9,7 @@ enum NotificationLoadState { initial, loading, success, error }
 /// count (for the dashboard bell badge), and marking items read. Provided
 /// app-wide (see main.dart) so the bell badge and the Notifications screen
 /// stay in sync.
-class NotificationViewModel extends ChangeNotifier {
+class NotificationViewModel extends PerformanceNotifier {
   final NotificationRepository _repository;
 
   NotificationViewModel({required NotificationRepository repository})

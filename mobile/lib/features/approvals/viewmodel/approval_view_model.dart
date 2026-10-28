@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/project_change_request.dart';
@@ -12,7 +12,7 @@ enum ApprovalLoadState { initial, loading, success, error }
 /// Project Controller's submit action) - the list of `ProjectChangeRequest`s,
 /// the list of `ProjectDeactivationRequest`s, and their
 /// approve/reject/submit mutations.
-class ApprovalViewModel extends ChangeNotifier {
+class ApprovalViewModel extends PerformanceNotifier {
   final ApprovalRepository _repository;
 
   ApprovalViewModel({required ApprovalRepository repository})

@@ -29,6 +29,7 @@ from .mobile_contracts import module_response,project_response
 from .roster import refresh_project_roster
 from .approvals import claim_pending
 from .module_validation import validate_module, MODULE_FIELDS, WORK_STAGES, STATUSES
+from .performance import PerformanceMiddleware, install_firestore_spans, span
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -36,16 +37,30 @@ async def lifespan(_app):
     from .push_worker import push_worker
     workers = [asyncio.create_task(email_worker()), asyncio.create_task(push_worker())] if settings.environment != 'local' else []
     try:
-        yield
+        # One pool per application event loop; close it with the service.
+        async with httpx.AsyncClient(timeout=20) as client:
+            _app.state.auth_http_client = client
+            try:
+                yield
+            finally:
+                _app.state.auth_http_client = None
     finally:
         for worker in workers:
             worker.cancel()
             with suppress(asyncio.CancelledError): await worker
 
 
-app = FastAPI(title='Crompton PMS', version='1.0.0', lifespan=lifespan)
+class TimedJSONResponse(JSONResponse):
+    def render(self, content):
+        with span('response.json_render'):
+            return super().render(content)
+
+
+app = FastAPI(title='Crompton PMS', version='1.0.0', lifespan=lifespan, default_response_class=TimedJSONResponse)
+install_firestore_spans()
+app.add_middleware(PerformanceMiddleware)
 local_origins=['http://127.0.0.1:3008','http://127.0.0.1:3009'] if settings.environment in ('local','development') else []
-app.add_middleware(CORSMiddleware, allow_origins=[settings.web_origin, 'http://127.0.0.1:3000']+local_origins, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type','Idempotency-Key'])
+app.add_middleware(CORSMiddleware, allow_origins=[settings.web_origin, 'http://127.0.0.1:3000']+local_origins, allow_methods=['GET','POST','PUT','DELETE'], allow_headers=['Authorization','Content-Type','Idempotency-Key','X-Request-ID'], expose_headers=['X-Request-ID','Server-Timing'])
 log = logging.getLogger('crompton')
 
 
@@ -98,7 +113,7 @@ def health(): return {'status':'ok','environment':settings.environment,'project'
 
 
 @app.post('/api/auth/login')
-async def login(body: dict):
+async def login(body: dict, request: Request):
     identifier = str(body.get('employeeCode','')).strip().lower()
     if len(identifier)>254 or not body.get('password'): raise HTTPException(401,'Invalid credentials')
     # Firebase owns password verification, throttling and refresh token issuance.
@@ -109,8 +124,16 @@ async def login(body: dict):
         if matches:email=matches[0]['employeeCode'].lower()+'@accounts.crompton.invalid'
     host = os.getenv('FIREBASE_AUTH_EMULATOR_HOST')
     base = f'http://{host}/identitytoolkit.googleapis.com' if host else 'https://identitytoolkit.googleapis.com'
-    async with httpx.AsyncClient(timeout=20) as client:
-        result = await client.post(f'{base}/v1/accounts:signInWithPassword',params={'key':settings.firebase_api_key},json={'email':email,'password':body.get('password'),'returnSecureToken':True})
+    with span('external.firebase_password_auth'):
+        client = getattr(request.app.state, 'auth_http_client', None)
+        async def authenticate(client):
+            return await client.post(f'{base}/v1/accounts:signInWithPassword',params={'key':settings.firebase_api_key},json={'email':email,'password':body.get('password'),'returnSecureToken':True})
+        if client is None:
+            # Supports embedded/test clients that do not start ASGI lifespan.
+            async with httpx.AsyncClient(timeout=20) as fallback:
+                result = await authenticate(fallback)
+        else:
+            result = await authenticate(client)
     if result.status_code != 200: raise HTTPException(401,'Invalid credentials')
     data = result.json()
     user = get('employees',data['localId'])

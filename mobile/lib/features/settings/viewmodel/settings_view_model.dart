@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../../auth/repository/auth_repository.dart';
@@ -12,7 +12,7 @@ enum SettingsLoadState { initial, loading, success, error }
 /// domain, so no dedicated repository is introduced here). App lock
 /// (PIN/biometric) stays on [AuthViewModel] since that's a device-level
 /// setting stored locally, not an account/backend concern.
-class SettingsViewModel extends ChangeNotifier {
+class SettingsViewModel extends PerformanceNotifier {
   final AuthRepository _repository;
 
   SettingsViewModel({required AuthRepository repository})

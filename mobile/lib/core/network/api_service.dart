@@ -1,3 +1,4 @@
+import '../services/performance_trace.dart';
 import 'firebase_transport.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:convert';
@@ -10,8 +11,32 @@ import '../services/session_manager.dart';
 import '../services/account_cache.dart';
 
 class ApiService {
+  Future<http.Response> post(
+    String endpoint,
+    Map<String, dynamic> body, {
+    String? token,
+    Duration? timeout,
+  }) => PerformanceTrace.measure(
+    'api.post',
+    () => _post(endpoint, body, token: token, timeout: timeout),
+  );
+  Future<http.Response> get(String endpoint, {String? token}) =>
+      PerformanceTrace.measure('api.get', () => _get(endpoint, token: token));
+  Future<http.Response> put(
+    String endpoint,
+    Map<String, dynamic> body, {
+    String? token,
+  }) => PerformanceTrace.measure(
+    'api.put',
+    () => _put(endpoint, body, token: token),
+  );
+  Future<http.Response> delete(String endpoint, {String? token}) =>
+      PerformanceTrace.measure(
+        'api.delete',
+        () => _delete(endpoint, token: token),
+      );
   static final _firebase = FirebaseTransport();
-  static final http.Client _client = http.Client();
+  static final http.Client _client = PerformanceHttpClient(http.Client());
   static String get baseUrl => ApiConstants.baseUrl;
 
   static const _timeout = Duration(seconds: ApiConstants.requestTimeoutSeconds);
@@ -57,15 +82,21 @@ class ApiService {
     return response;
   }
 
-  Future<http.Response> post(
+  Future<http.Response> _post(
     String endpoint,
     Map<String, dynamic> body, {
     String? token,
     Duration? timeout,
   }) async {
-    final direct = await _firebase.request('POST', endpoint, body);
+    final direct = await PerformanceTrace.measure(
+      'firebase.transport',
+      () => _firebase.request('POST', endpoint, body),
+    );
     if (direct != null) return direct;
-    token = await FirebaseAuth.instance.currentUser?.getIdToken();
+    token = await PerformanceTrace.measure(
+      'auth.token',
+      () async => FirebaseAuth.instance.currentUser?.getIdToken(),
+    );
     final response = await _client
         .post(
           Uri.parse('$baseUrl$endpoint'),
@@ -77,10 +108,16 @@ class ApiService {
     return _checkSession(response);
   }
 
-  Future<http.Response> get(String endpoint, {String? token}) async {
-    final direct = await _firebase.request('GET', endpoint, const {});
+  Future<http.Response> _get(String endpoint, {String? token}) async {
+    final direct = await PerformanceTrace.measure(
+      'firebase.transport',
+      () => _firebase.request('GET', endpoint, const {}),
+    );
     if (direct != null) return direct;
-    token = await FirebaseAuth.instance.currentUser?.getIdToken();
+    token = await PerformanceTrace.measure(
+      'auth.token',
+      () async => FirebaseAuth.instance.currentUser?.getIdToken(),
+    );
     final response = await _getWithRetry(endpoint, token);
     return _checkSession(response);
   }
@@ -105,14 +142,20 @@ class ApiService {
     }
   }
 
-  Future<http.Response> put(
+  Future<http.Response> _put(
     String endpoint,
     Map<String, dynamic> body, {
     String? token,
   }) async {
-    final direct = await _firebase.request('PUT', endpoint, body);
+    final direct = await PerformanceTrace.measure(
+      'firebase.transport',
+      () => _firebase.request('PUT', endpoint, body),
+    );
     if (direct != null) return direct;
-    token = await FirebaseAuth.instance.currentUser?.getIdToken();
+    token = await PerformanceTrace.measure(
+      'auth.token',
+      () async => FirebaseAuth.instance.currentUser?.getIdToken(),
+    );
     final response = await _client
         .put(
           Uri.parse('$baseUrl$endpoint'),
@@ -123,10 +166,16 @@ class ApiService {
     return _checkSession(response);
   }
 
-  Future<http.Response> delete(String endpoint, {String? token}) async {
-    final direct = await _firebase.request('DELETE', endpoint, const {});
+  Future<http.Response> _delete(String endpoint, {String? token}) async {
+    final direct = await PerformanceTrace.measure(
+      'firebase.transport',
+      () => _firebase.request('DELETE', endpoint, const {}),
+    );
     if (direct != null) return direct;
-    token = await FirebaseAuth.instance.currentUser?.getIdToken();
+    token = await PerformanceTrace.measure(
+      'auth.token',
+      () async => FirebaseAuth.instance.currentUser?.getIdToken(),
+    );
     final response = await _client
         .delete(Uri.parse('$baseUrl$endpoint'), headers: _buildHeaders(token))
         .timeout(_timeout);

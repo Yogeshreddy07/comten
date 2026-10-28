@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/billing_status_change_request.dart';
@@ -10,7 +10,7 @@ enum BillingApprovalLoadState { initial, loading, success, error }
 /// Project Controller requests to revert a completed billing project back
 /// to Pending) - the list of [BillingStatusChangeRequest]s and
 /// approve/reject mutations.
-class BillingApprovalViewModel extends ChangeNotifier {
+class BillingApprovalViewModel extends PerformanceNotifier {
   final BillingRepository _repository;
 
   BillingApprovalViewModel({required BillingRepository repository})

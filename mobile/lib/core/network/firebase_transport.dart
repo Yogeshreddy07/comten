@@ -1,3 +1,4 @@
+import '../services/performance_trace.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -14,7 +15,8 @@ class FirebaseTransport {
   final db=FirebaseFirestore.instance;
   final auth=FirebaseAuth.instance;
   Map<String,dynamic>? _profile;
-  Future<List<QueryDocumentSnapshot<Map<String,dynamic>>>> pages(Query<Map<String,dynamic>> query,{bool singlePage=false, bool serverOnly=false}) async {
+  Future<List<QueryDocumentSnapshot<Map<String,dynamic>>>> pages(Query<Map<String,dynamic>> query,{bool singlePage=false, bool serverOnly=false}) => PerformanceTrace.measure('firebase.pages', () => _pages(query, singlePage:singlePage, serverOnly:serverOnly));
+  Future<List<QueryDocumentSnapshot<Map<String,dynamic>>>> _pages(Query<Map<String,dynamic>> query,{bool singlePage=false, bool serverOnly=false}) async {
     final result=<QueryDocumentSnapshot<Map<String,dynamic>>>[];
     QueryDocumentSnapshot<Map<String,dynamic>>? cursor;
     while(true) {
@@ -37,8 +39,9 @@ class FirebaseTransport {
     if(value is List) return value.map(serial).toList();
     return value;
   }
-  http.Response response(dynamic data,{String message='Success',int status=200}) => http.Response(jsonEncode({'success':status<400,'message':message,'data':serial(data)}),status,headers:{'content-type':'application/json'});
-  Future<Map<String,dynamic>> profile() async {
+  http.Response response(dynamic data,{String message='Success',int status=200}) => http.Response(PerformanceTrace.measureSync('client.firebase_encode', () => jsonEncode({'success':status<400,'message':message,'data':serial(data)})),status,headers:{'content-type':'application/json'});
+  Future<Map<String,dynamic>> profile() => PerformanceTrace.measure('firebase.profile', () => _loadProfile());
+  Future<Map<String,dynamic>> _loadProfile() async {
     final user=auth.currentUser;
     if(user==null) throw StateError('Sign in required');
     final data=(await db.collection('employees').doc(user.uid).get(const GetOptions(source:Source.server)).timeout(const Duration(seconds:8))).data();
@@ -278,7 +281,8 @@ class FirebaseTransport {
     }
     return result;
   }
-  Future<http.Response> attendance(String method,List<String> parts,Map<String,dynamic> body,Map<String,dynamic> p,Uri uri) async {
+  Future<http.Response> attendance(String method,List<String> parts,Map<String,dynamic> body,Map<String,dynamic> p,Uri uri) => PerformanceTrace.measure('firebase.attendance', () => _attendance(method,parts,body,p,uri));
+  Future<http.Response> _attendance(String method,List<String> parts,Map<String,dynamic> body,Map<String,dynamic> p,Uri uri) async {
     final now=DateTime.now().toUtc().add(const Duration(minutes:330));
     final day=DateTime.utc(now.year,now.month,now.day);
     final dayId=(p['id'] as int)*100000000+day.year*10000+day.month*100+day.day;
@@ -318,7 +322,8 @@ class FirebaseTransport {
     });
     return response((await ref.get()).data());
   }
-  Future<http.Response> submitWorkLog(Map<String,dynamic> body,Map<String,dynamic> p) async {
+  Future<http.Response> submitWorkLog(Map<String,dynamic> body,Map<String,dynamic> p) => PerformanceTrace.measure('firebase.submitWorkLog', () => _submitWorkLog(body,p));
+  Future<http.Response> _submitWorkLog(Map<String,dynamic> body,Map<String,dynamic> p) async {
     final date=DateTime.parse(body['workDate'] as String);
     if(date.weekday==DateTime.sunday||date.isAfter(DateTime.now())) throw StateError('Select a valid working day');
     final bill=(body['billableDurationSeconds'] as num?)?.toInt()??0,non=(body['nonBillableDurationSeconds'] as num?)?.toInt()??0;

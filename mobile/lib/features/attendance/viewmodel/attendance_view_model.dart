@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import '../../../core/services/performance_trace.dart';
 
 import '../../auth/model/api_result.dart';
 import '../model/attendance.dart';
@@ -12,7 +12,7 @@ enum AttendanceLoadState { initial, loading, success, error }
 /// checked in/out yet, and performing the check-in/check-out actions. The
 /// Team Leader's view of their team's history is a separate concern - see
 /// [AttendanceTeamViewModel] - since the two roles never share a screen.
-class AttendanceViewModel extends ChangeNotifier {
+class AttendanceViewModel extends PerformanceNotifier {
   final AttendanceRepository _repository;
 
   AttendanceViewModel({required AttendanceRepository repository})
