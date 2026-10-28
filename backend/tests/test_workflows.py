@@ -212,9 +212,15 @@ def test_phone_otp_cooldown_expiry_attempts_and_replay(tokens):
     try:
         assert client.post('/api/auth/phone/send',json={'phone':'9000000002'},headers=tokens['employee']).status_code==403
         assert client.post('/api/auth/phone/send',json={'phone':'+91 90000 00001'},headers=tokens['employee']).status_code==200
-        assert client.post('/api/auth/phone/send',json={'phone':'9000000001'},headers=tokens['employee']).status_code==429
+        wait=client.post('/api/auth/phone/send',json={'phone':'9000000001'},headers=tokens['employee'])
+        assert wait.status_code==429
+        assert 1<=wait.json()['data']['retryAfterSeconds']<=60
+        assert int(wait.headers['Retry-After'])==wait.json()['data']['retryAfterSeconds']
         assert 'otp' not in ref.get().to_dict()
-        for _ in range(5): assert client.post('/api/auth/phone/verify',json={'otp':'000000'},headers=tokens['employee']).status_code==401
+        for left in (4,3,2,1,0):
+            wrong=client.post('/api/auth/phone/verify',json={'otp':'000000'},headers=tokens['employee'])
+            assert wrong.status_code==401
+            assert (f'{left} attempt' if left else 'Too many incorrect attempts') in wrong.json()['message']
         assert client.post('/api/auth/phone/verify',json={'otp':'123456'},headers=tokens['employee']).status_code==401
         assert ref.get().to_dict()['attempts']==5
         ref.update({'attempts':0,'expires':time.time()-1})
@@ -260,6 +266,35 @@ def test_msg91_firebase_linkage_concurrent_replay_and_changed_phone(tokens,monke
         assert minted==['4'] and get('employees',4)['phoneVerified'] is False
     finally:
         employee.update({'phone':person.get('phone',''),'phoneVerified':person.get('phoneVerified',False)});ref.delete()
+
+
+def test_provider_attempt_limit_retires_code_and_allows_immediate_resend(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from app import recovery
+    person={'id':time.time_ns()//1000,'phone':'9000000088','active':True}
+    ref=db.collection('phone-challenges').document(str(person['id']))
+    rate=db.collection('phone-rate-limits').document(__import__('hashlib').sha256(b'919000000088').hexdigest())
+    monkeypatch.setattr(recovery.settings,'environment','development')
+    async def reject(*args): raise HTTPException(401,'Too many incorrect attempts. Tap Resend OTP to get a new code.')
+    async def send(*args): return 'synthetic-new-request'
+    monkeypatch.setattr(recovery,'verify_msg91',reject)
+    monkeypatch.setattr(recovery,'send_msg91',send)
+    ref.set({'challengeId':'synthetic','phone':'919000000088','sent':time.time(),'expires':time.time()+600,'attempts':3,'state':'SENT','widgetId':recovery.settings.msg91_widget_id,'providerRequestId':'synthetic-request'})
+    rate.set({'count':1,'lastSent':time.time(),'window':time.time()})
+    try:
+        with pytest.raises(HTTPException) as failure:
+            asyncio.run(recovery.phone_verify({'otp':'000000'},user=person))
+        assert 'Too many incorrect attempts' in failure.value.detail
+        assert ref.get().to_dict()['busyUntil']==0 and ref.get().to_dict()['expires']==0
+        with pytest.raises(HTTPException) as repeated:
+            asyncio.run(recovery.phone_verify({'otp':'123456'},user=person))
+        assert 'Too many incorrect attempts' in repeated.value.detail
+        response=asyncio.run(recovery.phone_send({'phone':person['phone']},user=person))
+        assert response['success'] and ref.get().to_dict()['attempts']==0
+        assert rate.get().to_dict()['count']==2
+    finally:
+        ref.delete();rate.delete()
 
 
 def test_simultaneous_change_request_submits_create_one_request(tokens):

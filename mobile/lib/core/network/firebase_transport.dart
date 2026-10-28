@@ -67,7 +67,7 @@ class FirebaseTransport {
         var identifier=body['employeeCode'] as String;
         if(identifier.contains('@')) {
           // Contact aliases require authoritative uniqueness and credential checks.
-          final resolved=await http.post(Uri.parse('${ApiConstants.baseUrl}/auth/login'),headers:{'Content-Type':'application/json'},body:jsonEncode(body));
+          final resolved=await http.post(Uri.parse('${ApiConstants.baseUrl}/auth/login'),headers:{'Content-Type':'application/json'},body:jsonEncode(body)).timeout(const Duration(seconds:ApiConstants.loginTimeoutSeconds));
           if(resolved.statusCode!=200) return resolved;
           identifier=jsonDecode(resolved.body)['data']['employeeCode'] as String;
         }
@@ -93,6 +93,7 @@ class FirebaseTransport {
       // These writes are authorized by the backend. Avoid a redundant profile
       // round trip before sending the authenticated request.
       if ((method == 'DELETE' && collection == 'activities') ||
+          (method != 'GET' && collection == 'employees') ||
           (method == 'POST' && ['projects', 'modules'].contains(collection)) ||
           (method != 'GET' && ['projects', 'modules'].contains(collection) &&
               (method == 'DELETE' || parts.length > 2))) {
@@ -115,7 +116,9 @@ class FirebaseTransport {
       final manager=['CAPTAIN','PROJECT_CONTROLLER'].contains(p['role']);
       if(endpoint=='/users/me') return response(p);
       if(method!='GET') await AccountCache.instance.invalidateData();
-      if(method=='GET' && !['notifications','attendance','work-logs'].contains(collection)) {
+      final actionablePicker = (collection=='modules' && (parts.contains('led') || uri.queryParameters.containsKey('projectId'))) ||
+          (collection=='projects' && uri.queryParameters['hasInProgressModule']=='true');
+      if(method=='GET' && !actionablePicker && !['notifications','attendance','work-logs'].contains(collection)) {
         final cached=AccountCache.instance.read(endpoint,stale:false);
         if(cached!=null) return response(cached);
       }
@@ -183,7 +186,7 @@ class FirebaseTransport {
         data=data.where((r)=>['EMPLOYEE','TEAM_LEADER'].contains(r['role'])).toList();
       }
       if(collection=='modules' && parts.contains('led')) data=data.where((r)=>r['teamLeadId']==id).toList();
-      if(collection=='modules' && parts.contains('completed')) data=data.where((r)=>r['teamLeadId']==id && r['active']==true && (['NOT_STARTED','IN_PROGRESS','COMPLETED'].contains(r['status']) || r['workStage']=='BILLING')).toList();
+      if(collection=='modules' && parts.contains('completed')) data=data.where((r)=>r['teamLeadId']==id && r['active']==true && r['billingStatus']!='FULL_PAYMENT_RECEIVED' && (['NOT_STARTED','IN_PROGRESS','COMPLETED'].contains(r['status']) || r['workStage']=='BILLING')).toList();
       if(collection=='notifications') data.sort((a,b)=>b['createdAt'].toString().compareTo(a['createdAt'].toString()));
       if(collection=='work-logs') {
         data.sort((a,b) {
@@ -204,17 +207,24 @@ class FirebaseTransport {
       // every employee profile, including historical members no longer in the
       // lead's peer roster, and can deny the entire picker unnecessarily.
       final ledPicker=collection=='modules' && parts.contains('led');
-      if(ledPicker) data=data.where((r)=>r['active']==true).toList();
-      var result=ledPicker ? data : await Future.wait(data.map((r)=>decorate(collection,r,summaryOnly:true)));
+      if(ledPicker) data=data.where((r)=>r['active']==true && (parts.contains('completed') || (displayStatus(r)!='COMPLETED' && r['billingStatus']!='FULL_PAYMENT_RECEIVED'))).toList();
+      var result=ledPicker ? data.map((r)=>{...r,'storedStatus':r['status'],'status':displayStatus(r)}).toList() : await Future.wait(data.map((r)=>decorate(collection,r,summaryOnly:true)));
       if(collection=='projects' && uri.queryParameters['hasInProgressModule']=='true') {
-        result=result.where((r)=>(r['modules'] as List).any((m)=>m['active']==true && (m['storedStatus']??m['status'])=='IN_PROGRESS' && (m['memberIds'] as List).contains(id))).toList();
+        result=result.where((r)=>r['active']==true && (r['modules'] as List).any((m)=>m['active']==true && m['status']=='IN_PROGRESS' && m['billingStatus']!='FULL_PAYMENT_RECEIVED' && (m['memberIds'] as List).contains(id))).toList();
       }
       await AccountCache.instance.put(endpoint,serial(result),revision:cacheRevision);return response(result);
-    } on FirebaseAuthException catch(e) { return response(null,status:401,message:e.message??'Authentication failed'); }
+    } on FirebaseAuthException catch(e) { return response(null,status:e.code=='too-many-requests'?429:401,message:authErrorMessage(e.code)); }
       on TimeoutException { return response(null,status:503,message:'Firebase connection timed out'); }
       on FirebaseException catch(e) { return response(null,status:e.code=='permission-denied'?403:503,message:e.code=='permission-denied'?'Permission denied':'Firebase is unavailable'); }
       on StateError catch(e) { return response(null,status:409,message:e.message); }
   }
+  static String authErrorMessage(String code) => switch(code) {
+    'too-many-requests' => 'Login is temporarily limited after repeated attempts. Wait before trying again, or use Forgot Password. Repeated retries can prolong the restriction.',
+    'wrong-password' || 'user-not-found' || 'invalid-credential' => 'Incorrect employee code or password. Check your details or use Forgot Password.',
+    'network-request-failed' => 'Cannot reach the sign-in service. Check your internet connection and try again.',
+    'user-disabled' => 'This account is inactive or activation is incomplete. Contact your administrator or open Activate Account.',
+    _ => 'Sign-in could not complete. Please try again.',
+  };
   /// Displayed module status: an in-progress module with no pending hours
   /// left (worked >= estimate) reads as Completed. Derived, not stored, so
   /// an approved estimate increase moves it back to In Progress. Mirrors the
@@ -248,8 +258,7 @@ class FirebaseTransport {
     }
       if(collection=='modules') {
       result['status']=displayStatus(row);
-      // Timesheet eligibility keys off the stored status, so a module that has
-      // used up its hours still accepts time even while shown as Completed.
+      // Preserve the stored state for editing; pickers use the displayed state.
       result['storedStatus']=row['status'];
       result['completedHours']=row['completedHours']??0;
       result['completedMinutes']=row['completedMinutes']??0;
@@ -330,6 +339,9 @@ class FirebaseTransport {
     if(bill<0||non<0||bill+non<=0||bill+non>86400) throw StateError('Duration must be between zero and 24 hours');
     final m=(await db.collection('modules').doc(body['moduleId'].toString()).get()).data();
     if(m==null) throw StateError('Module not found');
+    if(displayStatus(m)!='IN_PROGRESS' || m['billingStatus']=='FULL_PAYMENT_RECEIVED') {
+      throw StateError('This module is completed or inactive. Refresh and select an in-progress module.');
+    }
     final dayId=(p['id'] as int)*100000000+date.year*10000+date.month*100+date.day;
     final key=int.parse(sha256.convert(utf8.encode('${p['id']}:${jsonEncode(body)}')).toString().substring(0,13),radix:16).toString();
     final billIds=List<int>.from(body['billableActivityIds'] as List? ?? []), nonIds=List<int>.from(body['nonBillableActivityIds'] as List? ?? []);

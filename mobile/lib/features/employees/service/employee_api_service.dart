@@ -12,7 +12,8 @@ class EmployeeApiService {
   final ApiService _apiService = ApiService();
 
   Future<http.Response> validateIdentity(Map<String, dynamic> body, {String? token}) {
-    return _apiService.post('/employees/validate-identity', body, token: token);
+    return _apiService.post('/employees/validate-identity', body, token: token,
+        timeout: const Duration(seconds:30));
   }
 
   /// The general management directory contains Employees and Team Leaders.
@@ -29,7 +30,10 @@ class EmployeeApiService {
     Map<String, dynamic> body, {
     String? token,
   }) {
-    return _apiService.post(ApiConstants.employees, body, token: token);
+    // Provisioning spans Firebase Auth plus Firestore. Give the single write
+    // time to finish; never replay it automatically after an uncertain timeout.
+    return _apiService.post(ApiConstants.employees, body, token: token,
+        timeout: const Duration(seconds:60));
   }
 
   Future<http.Response> updateEmployee(

@@ -346,7 +346,8 @@ class _SubmitTimesheetScreenState extends State<SubmitTimesheetScreen> {
     final eligibleModules = modulesReady
         ? moduleViewModel.modules
             .where((m) =>
-                m.lifecycleStatus == 'IN_PROGRESS' &&
+                m.status == 'IN_PROGRESS' &&
+                m.billingStatus != 'FULL_PAYMENT_RECEIVED' &&
                 !TimesheetValidator.isModuleExpiredForLogging(m.endDate))
             .toList()
         : const <ModuleListItem>[];

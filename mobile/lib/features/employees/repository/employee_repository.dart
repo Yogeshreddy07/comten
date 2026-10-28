@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:http/http.dart' as http;
 
@@ -54,6 +55,10 @@ class EmployeeRepository {
             ? mapData(rawData)
             : (success ? rawData : null),
       );
+    } on TimeoutException {
+      return ApiResult(success: false, message: 'The server is taking too long. Check your connection and refresh before trying again.');
+    } on FormatException {
+      return ApiResult(success: false, message: 'The server returned an unexpected response. Please try again.');
     } catch (e) {
       return ApiResult(
         success: false,

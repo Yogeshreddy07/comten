@@ -41,7 +41,9 @@ class ReasonForDelayViewModel extends PerformanceNotifier {
     final result = await _moduleRepository.getLedModules();
 
     if (result.success) {
-      _ledModules = (result.data as List<ModuleListItem>?) ?? [];
+      _ledModules = ((result.data as List<ModuleListItem>?) ?? [])
+          .where((m) => m.status != 'COMPLETED' && m.status != 'INACTIVE' &&
+              m.billingStatus != 'FULL_PAYMENT_RECEIVED').toList();
       _loadState = ReasonForDelayLoadState.success;
     } else {
       _errorMessage = result.message;

@@ -18,6 +18,9 @@ class TimesheetValidator {
     if (value == null) {
       return 'Module is required';
     }
+    if (value.status != 'IN_PROGRESS' || value.billingStatus == 'FULL_PAYMENT_RECEIVED') {
+      return 'Select an in-progress module. Completed modules cannot log hours.';
+    }
     return null;
   }
 

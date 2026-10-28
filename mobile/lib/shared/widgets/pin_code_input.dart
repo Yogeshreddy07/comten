@@ -79,7 +79,12 @@ class _PinCodeInputState extends State<PinCodeInput> {
         alignment: Alignment.center,
         children: [
           GestureDetector(
-            onTap: () => _focusNode.requestFocus(),
+            onTap: () {
+              _focusNode.requestFocus();
+              // Android Back hides the IME without dropping field focus.
+              // requestFocus alone is then a no-op; reopen its connection.
+              SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+            },
             behavior: HitTestBehavior.opaque,
             child: Stack(
               alignment: Alignment.center,

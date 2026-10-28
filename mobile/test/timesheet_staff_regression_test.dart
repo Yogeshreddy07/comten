@@ -71,7 +71,8 @@ void main() {
     expect(blocked.message,contains('already completed and cannot be moved back to WIP'));
     expect(repository.writes,0);
     expect(model.ledModules.first.workStage,'BILLING');
-    expect((await model.updateWorkStage(3,'WIP')).message,contains('already completed and cannot be moved back to WIP'));
+    expect(model.ledModules.map((m)=>m.id),[1,2]);
+    expect((await model.updateWorkStage(3,'WIP')).message,contains('no longer available'));
     final repeat=await model.updateWorkStage(1,'BILLING');
     expect(repeat.success,false);
     expect(repeat.message,'This module is already in Billing.');

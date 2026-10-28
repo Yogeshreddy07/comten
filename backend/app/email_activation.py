@@ -241,7 +241,7 @@ async def send_phone(body: dict):
     person, _, _ = phone_session(body)
     # The destination always comes from the enrolled record, never from input.
     result = await phone_send({'phone': person['phone']}, user=person)
-    result['data'] = {'maskedPhone': mask_phone(person['phone'])}
+    result['data'] = {**(result.get('data') or {}), 'maskedPhone': mask_phone(person['phone'])}
     return result
 
 

@@ -115,8 +115,12 @@ async def phone_send(body: dict,user=Depends(current_user)):
         count=rate.get('count',0) if rate.get('window',0)>now-3600 else 0
         # A locked-out code can be replaced immediately; the hourly cap still applies.
         locked=old.get('attempts',0)>=5 and old.get('phone')==phone
-        if (not locked and (old.get('sent',0)>now-60 or rate.get('lastSent',0)>now-60)) or count>=5:
-            return False
+        if count>=5:
+            wait=max(1,int(rate.get('window',now)+3600-now)+1)
+            raise HTTPException(429,'Too many OTP requests. Please try again later.',headers={'Retry-After':str(wait)})
+        if not locked and (old.get('sent',0)>now-60 or rate.get('lastSent',0)>now-60):
+            wait=max(1,int(max(old.get('sent',0),rate.get('lastSent',0))+60-now)+1)
+            raise HTTPException(429,f'Please wait {wait} seconds before requesting another code.',headers={'Retry-After':str(wait)})
         tx.set(ref,{'challengeId':challenge,'sent':now,'expires':now+600,'attempts':0,'phone':phone,'state':'SENDING'})
         tx.set(throttle,{'lastSent':now,'count':count+1,'window':rate.get('window',now) if count else now,'expires':now+86400})
         return True
@@ -127,7 +131,7 @@ async def phone_send(body: dict,user=Depends(current_user)):
         ref.update({'state':'SEND_FAILED'})
         raise
     ref.update({'state':'SENT','providerRequestId':request_id,'widgetId':settings.msg91_widget_id})
-    return {'success':True,'data':None,'message':'Verification code requested'}
+    return {'success':True,'data':{'resendAfterSeconds':60},'message':'Verification code requested'}
 
 
 @router.post('/auth/phone/verify')
@@ -137,7 +141,9 @@ async def phone_verify(body: dict,user=Depends(current_user)):
     @firestore.transactional
     def claim(tx):
         row=ref.get(transaction=tx).to_dict()
-        if not row or row.get('state')!='SENT' or row['expires']<time.time(): return 'OTP has expired. Tap Resend OTP to get a new code.'
+        if not row or row.get('state')!='SENT': return 'OTP has expired. Tap Resend OTP to get a new code.'
+        if row.get('retiredMessage'): return row['retiredMessage']
+        if row['expires']<time.time(): return 'OTP has expired. Tap Resend OTP to get a new code.'
         if row['attempts']>=5: return 'Too many incorrect attempts. Tap Resend OTP to get a new code.'
         if row.get('busyUntil',0)>time.time(): return 'Verification already in progress. Please wait a moment and retry.'
         tx.update(ref,{'attempts':row['attempts']+1,'claim':claim_id,'busyUntil':time.time()+60})
@@ -153,7 +159,7 @@ async def phone_verify(body: dict,user=Depends(current_user)):
     except Exception as error:
         rejected=isinstance(error,HTTPException) and error.status_code==401
         wrong=rejected and error.detail=='Invalid or expired verification code'
-        retired=rejected and str(error.detail).startswith('OTP has expired')
+        retired=rejected and str(error.detail).startswith(('OTP has expired','Too many incorrect attempts'))
         # Always release the claim so the next try is evaluated. Provider
         # outages do not count against the user's attempts, and a code the
         # provider retired is closed so a new one can be sent at once.
@@ -162,7 +168,7 @@ async def phone_verify(body: dict,user=Depends(current_user)):
             current=ref.get(transaction=tx).to_dict() or {}
             if current.get('claim')!=claim_id: return
             change={'busyUntil':0}
-            if retired: change|={'attempts':5,'expires':0}
+            if retired: change|={'attempts':5,'expires':0,'retiredMessage':str(error.detail)}
             elif not rejected: change['attempts']=max(current.get('attempts',1)-1,0)
             tx.update(ref,change)
         transact(release)

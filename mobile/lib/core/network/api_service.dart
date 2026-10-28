@@ -93,7 +93,7 @@ class ApiService {
       () => _firebase.request('POST', endpoint, body),
     );
     if (direct != null) return direct;
-    token = await PerformanceTrace.measure(
+    token = endpoint.startsWith('/auth/signup/') || endpoint.startsWith('/auth/forgot-password/') ? null : await PerformanceTrace.measure(
       'auth.token',
       () async => FirebaseAuth.instance.currentUser?.getIdToken(),
     );

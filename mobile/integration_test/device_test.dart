@@ -48,7 +48,7 @@ void main(){
   }
   Future<void> tapText(String text) async{
    if(text=='Logout'){
-    await waitFor(find.text('My attachments'));
+    await waitFor(find.text('Change Password'));
     await tester.scrollUntilVisible(find.text('Logout'),200,scrollable:find.byType(Scrollable).last,maxScrolls:12);
    }
    Finder resolve(){

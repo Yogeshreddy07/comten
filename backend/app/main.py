@@ -30,6 +30,7 @@ from .roster import refresh_project_roster
 from .approvals import claim_pending
 from .module_validation import validate_module, MODULE_FIELDS, WORK_STAGES, STATUSES
 from .performance import PerformanceMiddleware, install_firestore_spans, span
+from .module_events import queue_completion
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -73,7 +74,8 @@ def ok(data=None, message='Success'):
 
 @app.exception_handler(HTTPException)
 async def error(_request, exc):
-    return JSONResponse({'success':False,'message':str(exc.detail),'data':None},status_code=exc.status_code)
+    retry=(exc.headers or {}).get('Retry-After')
+    return JSONResponse({'success':False,'message':str(exc.detail),'data':{'retryAfterSeconds':int(retry)} if retry and retry.isdigit() else None},status_code=exc.status_code,headers=exc.headers)
 
 
 @app.exception_handler(RequestValidationError)
@@ -134,7 +136,11 @@ async def login(body: dict, request: Request):
                 result = await authenticate(fallback)
         else:
             result = await authenticate(client)
-    if result.status_code != 200: raise HTTPException(401,'Invalid credentials')
+    if result.status_code != 200:
+        reason=result.json().get('error',{}).get('message','')
+        if reason.startswith('TOO_MANY_ATTEMPTS_TRY_LATER'):
+            raise HTTPException(429,'Login is temporarily limited after repeated attempts. Wait before trying again, or use Forgot Password.')
+        raise HTTPException(401,'Invalid credentials')
     data = result.json()
     user = get('employees',data['localId'])
     if not user or not user.get('active') or user.get('activationStatus') in ('PENDING', 'PHONE_PENDING'): raise HTTPException(401,'Invalid credentials')
@@ -328,10 +334,11 @@ def decide_worklog(key: str, action: str, body: dict, user=Depends(current_user)
         if user['role'] not in ('CAPTAIN','PROJECT_CONTROLLER') and not (user['role']=='TEAM_LEADER' and module and module.get('teamLeadId')==user['id']): raise HTTPException(403,'Permission denied')
         if row['approvalStatus']!='PENDING': raise HTTPException(409,'Already decided')
         changes={'approvalStatus':'APPROVED' if action=='approve' else 'REJECTED','rejectionReason':str(body.get('rejectionReason',''))[:1000],'approvedById':user['id'],'approvedByName':user['name'],'approvedAt':datetime.now(timezone.utc).isoformat()}
-        tx.update(ref,changes)
         if action=='approve' and module:
             total=(module.get('completedSeconds') or 0)+(row.get('billableDurationSeconds') or 0)
+            queue_completion(tx,module,module|{'completedMinutes':total//60})
             tx.update(module_ref,{'completedSeconds':total,'completedMinutes':total//60,'completedHours':total//3600})
+        tx.update(ref,changes)
         if action=='reject' and ledger:
             tx.update(ledger_ref,{'totalSeconds':max(0,ledger['totalSeconds']-(row.get('billableDurationSeconds') or 0)-(row.get('nonBillableDurationSeconds') or 0))})
         notification_id=next_id()

@@ -189,8 +189,10 @@ async def verify_msg91(phone: str, otp: str, request_id: str):
         except (ValueError,AttributeError): reason=''
         # The widget retires a request after expiry or its own retry cap; a
         # correct code cannot succeed then, so ask for a fresh one.
-        if any(marker in reason for marker in ('expire','limit','max','exceed')):
+        if 'expire' in reason:
             raise HTTPException(401,'OTP has expired. Tap Resend OTP to get a new code.')
+        if any(marker in reason for marker in ('limit','max','exceed')):
+            raise HTTPException(401,'Too many incorrect attempts. Tap Resend OTP to get a new code.')
         raise HTTPException(401,'Invalid or expired verification code')
     access_token=result.json().get('message')
     if not isinstance(access_token,str) or not 16<=len(access_token)<=8192:

@@ -49,6 +49,10 @@ class NotificationNavigator {
     }
 
     final type = notification.effectiveType;
+    if (notification.type == 'PROJECT_DEACTIVATION_REQUESTED') {
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => const ApprovalListScreen()));
+      return;
+    }
 
     if (type.isDelayRequest) {
       await Navigator.push(

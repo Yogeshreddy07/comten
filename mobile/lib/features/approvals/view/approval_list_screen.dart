@@ -45,13 +45,9 @@ class _ApprovalListScreenState extends State<ApprovalListScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final approvalViewModel = context.read<ApprovalViewModel>();
-      if (approvalViewModel.loadState == ApprovalLoadState.initial) {
-        approvalViewModel.fetchChangeRequests();
-      }
+      approvalViewModel.fetchChangeRequests();
       final billingApprovalViewModel = context.read<BillingApprovalViewModel>();
-      if (billingApprovalViewModel.loadState == BillingApprovalLoadState.initial) {
-        billingApprovalViewModel.fetchChangeRequests();
-      }
+      billingApprovalViewModel.fetchChangeRequests();
     });
   }
 

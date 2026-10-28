@@ -73,13 +73,13 @@ class BillingEntry {
 
   /// [stage] treated as [BillingStage.pending] when not yet set, so the
   /// Pending/Completed tabs on [BillingListScreen] can bucket every project.
-  BillingStage get effectiveStage => BillingStageX.fromApiValue(stage);
+  BillingStage get effectiveStage => !editable ? BillingStage.completed : BillingStageX.fromApiValue(stage);
 
   factory BillingEntry.fromJson(Map<String, dynamic> json) {
     return BillingEntry(
       moduleId: json['moduleId'] as int,
       moduleName: json['moduleName'] as String? ?? '',
-      moduleStatus: json['moduleStatus'] as String?,
+      moduleStatus: json['editable'] == false ? 'INACTIVE' : json['moduleStatus'] as String?,
       projectId: json['projectId'] as int,
       projectCode: json['projectCode'] as String? ?? '',
       projectName: json['projectName'] as String? ?? '',

@@ -217,3 +217,62 @@ def test_module_with_no_pending_hours_reads_completed():
     assert effective_status(base|{'estimatedMinutes':0,'completedMinutes':65})=='IN_PROGRESS'
     assert effective_status(base|{'status':'ON_HOLD','completedMinutes':65})=='ON_HOLD'
     assert effective_status(base|{'active':False,'completedMinutes':65})=='INACTIVE'
+
+
+def test_inactive_billing_moves_to_completed_without_inventing_payment(graph):
+    client=graph[0]
+    pid,mid=create(graph)
+    ref=db.collection('modules').document(str(mid))
+    ref.update({'workStage':'BILLING','billingStatus':'PART_PAYMENT_RECEIVED'})
+    assert client.delete(f'/api/projects/{pid}').status_code==200
+    row=next(m for m in client.get('/api/billing').json()['data'] if m['moduleId']==mid)
+    assert row['stage']=='COMPLETED' and row['moduleStatus']=='INACTIVE' and not row['editable']
+    assert row['status']=='PART_PAYMENT_RECEIVED'
+    assert get('modules',mid)['billingStatus']=='PART_PAYMENT_RECEIVED'
+
+
+def test_repeated_deactivation_returns_pending_and_captain_can_decide(graph):
+    client=graph[0]
+    pid,mid=create(graph)
+    db.collection('modules').document(str(mid)).update({'workStage':'BILLING'})
+    app.dependency_overrides[current_user]=lambda:{'id':2,'name':'Controller','role':'PROJECT_CONTROLLER'}
+    first=client.delete(f'/api/projects/{pid}')
+    again=client.delete(f'/api/projects/{pid}')
+    assert first.status_code==again.status_code==200
+    assert again.json()['data']['deactivationPending'] is True
+    assert 'already awaiting' in again.json()['message']
+    requests=list(db.collection('project-deactivation-requests').where(filter=FieldFilter('projectId','==',pid)).stream())
+    assert len(requests)==1 and get('projects',pid)['active']
+    graph[-1].append(requests[0].reference)
+    app.dependency_overrides[current_user]=lambda:{'id':1,'name':'Captain','role':'CAPTAIN'}
+    result=client.put(f'/api/project-deactivation-requests/{requests[0].id}/approve',json={})
+    assert result.status_code==200,result.text
+    assert get('projects',pid)['active'] is False and get('modules',mid)['active'] is False
+
+
+def test_completion_alert_is_atomic_and_not_repeated_on_save(graph):
+    client,_,lead,employee,*_=graph
+    _,mid=create(graph)
+    for _ in range(2):
+        response=client.put(f'/api/modules/{mid}',json={'status':'COMPLETED'})
+        assert response.status_code==200,response.text
+    alerts=[s.to_dict() for s in db.collection('notifications').where(filter=FieldFilter('moduleId','==',mid)).stream() if s.to_dict().get('title')=='Module completed']
+    assert len([n for n in alerts if n['userId']==lead])==1
+    assert len([n for n in alerts if n['userId']==employee])==1
+    assert all(n['pushPending'] for n in alerts)
+    app.dependency_overrides[current_user]=lambda:{'id':lead,'role':'TEAM_LEADER'}
+    assert client.post('/api/notifications/delay-requests',json={'moduleId':mid,'reason':'Stale picker'}).status_code==409
+
+
+def test_hours_approval_crossing_estimate_emits_one_completion_alert(graph):
+    client,put,lead,employee,*_=graph
+    _,mid=create(graph)
+    db.collection('modules').document(str(mid)).update({'estimatedMinutes':60,'completedSeconds':3540,'completedMinutes':59})
+    for offset in (100,101):
+        key=mid+offset
+        put('work-logs',key,{'moduleId':mid,'moduleName':'Design','employeeId':employee,'projectId':get('modules',mid)['projectId'],
+                             'workDate':'2026-10-28','approvalStatus':'PENDING','billableDurationSeconds':60})
+        assert client.put(f'/api/work-logs/{key}/approve',json={}).status_code==200
+    alerts=[s.to_dict() for s in db.collection('notifications').where(filter=FieldFilter('moduleId','==',mid)).stream() if s.to_dict().get('title')=='Module completed']
+    assert len([n for n in alerts if n['userId']==employee])==1
+    assert len([n for n in alerts if n['userId']==lead])==1

@@ -272,6 +272,18 @@ def test_widget_rejects_missing_request_id_and_legacy_template_config(configured
     assert error.value.status_code==503
 
 
+@pytest.mark.parametrize('reason,expected',[
+    ('OTP expired','OTP has expired'),
+    ('Maximum verification attempts exceeded','Too many incorrect attempts'),
+    ('Invalid OTP','Invalid or expired verification code')])
+def test_widget_distinguishes_expiry_attempt_limit_and_incorrect_code(configured,monkeypatch,reason,expected):
+    async def fake(*a,**kw): return httpx.Response(200,json={'type':'error','message':reason})
+    monkeypatch.setattr(adapters,'provider_request',fake)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(adapters.verify_msg91('919000000000','000000','synthetic-request'))
+    assert error.value.status_code==401 and error.value.detail.startswith(expected)
+
+
 @pytest.fixture
 def resend(configured,monkeypatch):
     for key,value in {'email_provider':'resend','resend_dispatch_enabled':True,'resend_api_key':'re_synthetic_key','resend_from':'sender@example.invalid','resend_verified_domain':'example.invalid'}.items():

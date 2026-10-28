@@ -36,7 +36,8 @@ class StatusUpdateViewModel extends PerformanceNotifier {
     final result = await _repository.getCompletedLedModules();
 
     if (result.success) {
-      _ledModules = (result.data as List<ModuleListItem>?) ?? [];
+      _ledModules = ((result.data as List<ModuleListItem>?) ?? [])
+          .where((m) => m.billingStatus != 'FULL_PAYMENT_RECEIVED').toList();
       _loadState = StatusUpdateLoadState.success;
     } else {
       _errorMessage = result.message;
@@ -51,12 +52,15 @@ class StatusUpdateViewModel extends PerformanceNotifier {
 
   Future<ApiResult> updateWorkStage(int moduleId, String workStage) async {
     final module = _ledModules.where((m) => m.id == moduleId).firstOrNull;
-    if (workStage == 'WIP' && (module?.lifecycleStatus == 'COMPLETED' ||
-        module?.billingStatus == 'FULL_PAYMENT_RECEIVED')) {
+    if (module == null) {
+      return ApiResult(success: false, message: 'This module is no longer available for status updates. Refresh the list.');
+    }
+    if (workStage == 'WIP' && (module.lifecycleStatus == 'COMPLETED' ||
+        module.billingStatus == 'FULL_PAYMENT_RECEIVED')) {
       return ApiResult(success: false,
           message: 'This module is already completed and cannot be moved back to WIP.');
     }
-    if (module != null && (module.workStage ?? 'WIP') == workStage) {
+    if ((module.workStage ?? 'WIP') == workStage) {
       return ApiResult(success: false, message: workStage == 'BILLING'
           ? 'This module is already in Billing.' : 'This module is already in WIP.');
     }

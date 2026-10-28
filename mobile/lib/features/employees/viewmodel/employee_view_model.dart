@@ -13,7 +13,7 @@ class EmployeeViewModel extends PerformanceNotifier {
   final EmployeeRepository _repository;
 
   EmployeeViewModel({required EmployeeRepository repository})
-      : _repository = repository;
+    : _repository = repository;
 
   // ---- List (GET /employees) ----
   EmployeeLoadState _loadState = EmployeeLoadState.initial;
@@ -67,47 +67,95 @@ class EmployeeViewModel extends PerformanceNotifier {
   bool get isSaving => _isSaving;
   bool get isDeactivating => _isDeactivating;
 
-  Future<ApiResult> validateIdentity({required String email, required String phone, int? excludeEmployeeId}) {
-    return _repository.validateIdentity(email: email, phone: phone, excludeEmployeeId: excludeEmployeeId);
+  Future<ApiResult> validateIdentity({
+    required String email,
+    required String phone,
+    int? excludeEmployeeId,
+  }) {
+    return _repository
+        .validateIdentity(
+          email: email,
+          phone: phone,
+          excludeEmployeeId: excludeEmployeeId,
+        )
+        .timeout(
+          const Duration(seconds: 30),
+          onTimeout: () => ApiResult(
+            success: false,
+            message:
+                'Employee validation timed out. Check your connection and tap Retry validation.',
+          ),
+        );
   }
 
   Future<ApiResult> createEmployee(CreateEmployeeRequest request) async {
+    if (_isSaving) {
+      return ApiResult(
+        success: false,
+        message: 'Employee save is already in progress.',
+      );
+    }
     _isSaving = true;
     notifyListeners();
+    try {
+      final result = await _repository.createEmployee(request);
 
-    final result = await _repository.createEmployee(request);
-
-    if (result.success) {
-      final created = result.data as Employee?;
-      if (created != null) {
-        _employees = [..._employees, created.copyWith()]
-          ..sort(Employee.compareByCode);
+      if (result.success) {
+        final created = result.data as Employee?;
+        if (created != null) {
+          _employees = [..._employees, created.copyWith()]
+            ..sort(Employee.compareByCode);
+        }
       }
-    }
 
-    _isSaving = false;
-    notifyListeners();
-    return result;
+      return result;
+    } catch (_) {
+      return ApiResult(
+        success: false,
+        message:
+            'Employee save could not be confirmed. Refresh the employee list before trying again.',
+      );
+    } finally {
+      _isSaving = false;
+      notifyListeners();
+    }
   }
 
-  Future<ApiResult> updateEmployee(int id, UpdateEmployeeRequest request) async {
+  Future<ApiResult> updateEmployee(
+    int id,
+    UpdateEmployeeRequest request,
+  ) async {
+    if (_isSaving) {
+      return ApiResult(
+        success: false,
+        message: 'Employee save is already in progress.',
+      );
+    }
     _isSaving = true;
     notifyListeners();
+    try {
+      final result = await _repository.updateEmployee(id, request);
 
-    final result = await _repository.updateEmployee(id, request);
-
-    if (result.success) {
-      final updated = result.data as Employee?;
-      if (updated != null) {
-        _employees = _employees
-            .map((e) => e.id == updated.id ? updated : e)
-            .toList();
+      if (result.success) {
+        final updated = result.data as Employee?;
+        if (updated != null) {
+          _employees = _employees
+              .map((e) => e.id == updated.id ? updated : e)
+              .toList();
+        }
       }
-    }
 
-    _isSaving = false;
-    notifyListeners();
-    return result;
+      return result;
+    } catch (_) {
+      return ApiResult(
+        success: false,
+        message:
+            'Employee save could not be confirmed. Refresh the employee list before trying again.',
+      );
+    } finally {
+      _isSaving = false;
+      notifyListeners();
+    }
   }
 
   /// Soft-deactivates the account (backend sets isActive=false; the row

@@ -47,7 +47,42 @@ class EmailViewModel extends AuthViewModel {
   Future<void> checkBiometricSupport() async {}
 }
 
+class CooldownRepository extends ResumeRepository {
+  int phoneSends=0;
+  @override
+  Future<ApiResult> sendActivationPhoneOtp(String employeeCode,String token) async {
+    phoneSends++;
+    return phoneSends==1 ? ApiResult(success:true,message:'Sent',data:{'resendAfterSeconds':60})
+        : ApiResult(success:false,message:'Please wait 90 seconds before requesting another code.',data:{'retryAfterSeconds':90});
+  }
+  @override
+  Future<ApiResult> verifyActivationPhoneOtp(String employeeCode,String token,String otp) async =>
+      ApiResult(success:false,message:'Too many incorrect attempts. Tap Resend OTP to get a new code.');
+}
+
 void main(){
+  testWidgets('retired OTP permits resend and server cooldown disables further sends',(tester) async {
+    tester.view.physicalSize=const Size(480,1100);tester.view.devicePixelRatio=1;
+    addTearDown(tester.view.resetPhysicalSize);addTearDown(tester.view.resetDevicePixelRatio);
+    final repository=CooldownRepository();
+    final model=EmailViewModel(repository);
+    await model.sendActivationOtp('EMP009');
+    await tester.pumpWidget(MultiProvider(providers:[
+      ChangeNotifierProvider<AuthViewModel>.value(value:model),
+      ChangeNotifierProvider(create:(_)=>ThemeViewModel()),
+    ],child:const MaterialApp(home:ActivationPhoneScreen())));
+    await tester.tap(find.text('Send Phone OTP'));await tester.pumpAndSettle();
+    expect(find.textContaining('Resend OTP in'),findsOneWidget);
+    await tester.enterText(find.widgetWithText(TextFormField,'Phone OTP'),'000000');
+    await tester.tap(find.text('Verify Phone OTP'));await tester.pumpAndSettle();
+    expect(find.text('Resend Phone OTP'),findsOneWidget);
+    await tester.tap(find.text('Resend Phone OTP'));await tester.pumpAndSettle();
+    expect(repository.phoneSends,2);
+    expect(find.textContaining('Resend OTP in 90 seconds'),findsOneWidget);
+    final resend=tester.widget<TextButton>(find.widgetWithText(TextButton,'Resend OTP in 90 seconds'));
+    expect(resend.onPressed,isNull);
+    await tester.pumpWidget(const SizedBox());model.dispose();
+  });
   testWidgets('employee code -> masked email OTP -> password -> enrolled phone OTP -> login',(tester) async {
     tester.view.physicalSize=const Size(480,1100);tester.view.devicePixelRatio=1;
     addTearDown(tester.view.resetPhysicalSize);addTearDown(tester.view.resetDevicePixelRatio);

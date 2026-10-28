@@ -11,7 +11,6 @@ import '../../../shared/constants/app_dimensions.dart';
 import '../../../shared/constants/app_strings.dart';
 import '../../../shared/enums/user_role.dart';
 import '../../../shared/widgets/app_button.dart';
-import '../../../shared/widgets/files_screen.dart';
 import '../../../shared/widgets/app_card.dart';
 import '../../../shared/widgets/app_empty_view.dart';
 import '../../../shared/widgets/app_loader.dart';
@@ -196,18 +195,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
-                    if (settings != null) _SettingsRow(
-                      icon: Icons.attach_file,
-                      title: 'My attachments',
-                      subtitle: 'Documents and profile images',
-                      onTap: () {
-                        if (!context.canPushRoute) return;
-                        Navigator.push(context, MaterialPageRoute(builder: (_) => FilesScreen(
-                          targetId: settings.userId,
-                          categories: const {'employee_document':'Documents','profile_image':'Profile images'},
-                        )));
-                      },
-                    ),
                     _SettingsRow(
                       icon: Icons.lock_outline,
                       title: AppStrings.settingsChangePassword,
