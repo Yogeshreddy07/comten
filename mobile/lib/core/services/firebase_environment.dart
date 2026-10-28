@@ -8,9 +8,6 @@ import 'package:hive_flutter/hive_flutter.dart';
 class FirebaseEnvironment {
   static const emulator = bool.fromEnvironment('USE_EMULATORS', defaultValue: true);
   static const host = String.fromEnvironment('EMULATOR_HOST', defaultValue: '127.0.0.1');
-  // USB-reversed physical devices use their own loopback. Android emulator
-  // builds retain FlutterFire's normal 10.0.2.2 mapping.
-  static const _automaticHostMapping = !bool.fromEnvironment('PERFORMANCE_SANDBOX');
   static const options = FirebaseOptions(
     apiKey: String.fromEnvironment('FIREBASE_API_KEY', defaultValue: 'demo-key'),
     appId: String.fromEnvironment('FIREBASE_APP_ID', defaultValue: '1:123456789:web:demo'),
@@ -23,8 +20,8 @@ class FirebaseEnvironment {
     await Firebase.initializeApp(options: options);
     FirebaseFirestore.instance.settings = const Settings(persistenceEnabled: false);
     if (emulator) {
-      await FirebaseAuth.instance.useAuthEmulator(host,9099,automaticHostMapping:_automaticHostMapping);
-      FirebaseFirestore.instance.useFirestoreEmulator(host,8086,automaticHostMapping:_automaticHostMapping);
+      await FirebaseAuth.instance.useAuthEmulator(host,9099);
+      FirebaseFirestore.instance.useFirestoreEmulator(host,8086);
     } else if (!kIsWeb) {
       await FirebaseAppCheck.instance.activate(providerAndroid: kReleaseMode ? const AndroidPlayIntegrityProvider() : const AndroidDebugProvider());
     }

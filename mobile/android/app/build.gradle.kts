@@ -12,8 +12,6 @@ val defines = (project.findProperty("dart-defines") as String? ?: "").split(",")
     .filter { it.isNotEmpty() }.map { String(Base64.getDecoder().decode(it)) }
     .associate { val pair = it.split("=", limit = 2); pair[0] to pair.getOrElse(1) { "" } }
 val cloudBuild = defines["USE_EMULATORS"] == "false"
-val performanceSandbox = defines["PERFORMANCE_SANDBOX"] == "true"
-require(!performanceSandbox || !cloudBuild) { "Performance sandbox must use local emulators" }
 val signingFile = file(System.getenv("PMS_ANDROID_KEY_PROPERTIES") ?: "../key.properties")
 val signingValues = Properties().apply { if (signingFile.exists()) signingFile.inputStream().use { load(it) } }
 
@@ -30,8 +28,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = if (performanceSandbox) "com.crompton.pms.frontend.performance" else "com.crompton.pms.frontend"
-        manifestPlaceholders["performanceCleartext"] = performanceSandbox.toString()
+        applicationId = "com.crompton.pms.frontend"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

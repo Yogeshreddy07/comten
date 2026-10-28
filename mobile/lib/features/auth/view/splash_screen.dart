@@ -26,6 +26,8 @@ class _SplashScreenState extends State<SplashScreen> {
       completed = await viewModel.getOnboardingCompleted(activeEmployeeCode);
     }
 
+    // Wait a brief moment for splash display
+    await Future.delayed(const Duration(seconds: 2));
     if (!mounted) return;
 
     if (activeEmployeeCode != null && completed) {

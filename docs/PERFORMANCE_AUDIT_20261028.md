@@ -1,10 +1,5 @@
 # Crompton PMS performance audit — 28 October 2026
 
-**Connected-device follow-up:** see [PERFORMANCE_DEVICE_20261028.md](PERFORMANCE_DEVICE_20261028.md)
-for the subsequent Android measurements, reproduced live billing delay, new
-batching fix and prepared APK. Device-availability statements below describe
-the initial investigation before the phone was connected.
-
 ## 1. Executive summary
 
 Audited local source at `0080174`, the two 25 October performance/bugfix notes,

@@ -88,13 +88,6 @@ class FirebaseTransport {
         await u.updatePassword(body['newPassword'] as String);return response(null);
       }
       if(collection=='auth') return null;
-      // Billing is always served and authorized by FastAPI. A client-side
-      // profile fetch here adds a Firestore round trip before the same live
-      // account/role checks on the server. Keep mutation cache invalidation.
-      if(collection=='billing') {
-        if(method!='GET') await AccountCache.instance.invalidateData();
-        return null;
-      }
       // Contact validation is authoritative, read-only backend work.
       if(endpoint=='/employees/validate-identity') return null;
       // These writes are authorized by the backend. Avoid a redundant profile

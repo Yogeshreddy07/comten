@@ -2,7 +2,7 @@ from datetime import datetime,timezone
 from fastapi import APIRouter,Depends,HTTPException,Request
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
-from .store import db,get,get_many,rows,all_rows,transact
+from .store import db,get,rows,all_rows,transact
 from .approvals import claim_pending,has_pending
 from .security import current_user,manager,require
 from .messaging import notify
@@ -13,33 +13,18 @@ from .mobile_contracts import module_response
 router=APIRouter(prefix='/api')
 
 
-def billing_row(m, records=None, pending=None):
-    project=(records.get(('projects',str(m['projectId']))) if records is not None else get('projects',m['projectId'])) or {}
-    lead=(records.get(('employees',str(m['teamLeadId']))) if records is not None else get('employees',m['teamLeadId'])) if m.get('teamLeadId') else None
+def billing_row(m):
+    project=get('projects',m['projectId']) or {}
+    lead=get('employees',m.get('teamLeadId')) if m.get('teamLeadId') else None
     status=m.get('billingStatus')
     stage='COMPLETED' if status=='FULL_PAYMENT_RECEIVED' else 'TO_BE_BILLED' if not status or status=='INVOICE_YET_TO_BE_RAISED' else 'PENDING'
-    return {**m,'moduleId':m['id'],'moduleStatus':m.get('status'),'status':status,'stage':stage,'editable':bool(m.get('active',True) and project.get('active') and not project.get('deleted')),'teamLeadName':lead.get('name') if lead else None,'updatedByName':m.get('updatedByName'),'reversionPending':pending.get(m['id'],False) if pending is not None else has_pending('billing-status-change-requests',m['id'])}
-
-
-def billing_rows(modules):
-    """Enrich the list in two batch reads, including stale-lock verification."""
-    keys=[]
-    for m in modules:
-        keys.extend([('projects',m['projectId']),
-                     ('pending-approvals',f"billing-status-change-requests-{m['id']}")])
-        if m.get('teamLeadId'): keys.append(('employees',m['teamLeadId']))
-    records=get_many(keys, fields=['active','deleted','name','requestId'])
-    held={m['id']:records.get(('pending-approvals',f"billing-status-change-requests-{m['id']}"),{}).get('requestId') for m in modules}
-    requests=get_many([('billing-status-change-requests',key) for key in held.values() if key is not None],fields=['approvalStatus'])
-    pending={mid:requests.get(('billing-status-change-requests',str(key)),{}).get('approvalStatus')=='PENDING' for mid,key in held.items()}
-    return [billing_row(m, records, pending) for m in modules]
+    return {**m,'moduleId':m['id'],'moduleStatus':m.get('status'),'status':status,'stage':stage,'editable':bool(m.get('active',True) and project.get('active') and not project.get('deleted')),'teamLeadName':lead.get('name') if lead else None,'updatedByName':m.get('updatedByName'),'reversionPending':has_pending('billing-status-change-requests',m['id'])}
 
 
 @router.get('/billing')
 def billing(user=Depends(current_user)):
     manager(user)
-    modules=[m for m in all_rows('modules',[('workStage','BILLING')]) if not m.get('deleted')]
-    return {'success':True,'message':'Billing loaded','data':billing_rows(modules)}
+    return {'success':True,'message':'Billing loaded','data':[billing_row(m) for m in all_rows('modules') if not m.get('deleted') and m.get('workStage')=='BILLING']}
 
 
 @router.put('/billing/{mid}')

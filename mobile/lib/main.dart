@@ -25,7 +25,7 @@ import 'core/utils/preference_util.dart';
 import 'core/utils/secure_storage_service.dart';
 import 'core/utils/snackbar_util.dart';
 
-Future<void> main() async {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await PreferenceUtil.init();
   await FirebaseEnvironment.initialize();
