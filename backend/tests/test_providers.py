@@ -138,6 +138,35 @@ def test_fcm_reaches_registered_employees_and_skips_backlog(monkeypatch,push_emp
     assert len(sent)==1 and ref.get().to_dict()['pushSkipped']=='stale'
 
 
+def test_push_waits_for_device_registration(monkeypatch,push_employees):
+    from app.store import db
+    uid=push_employees()
+    key,ref=_push_fixture(monkeypatch,uid,registered=True)
+    db.collection('device-tokens').document(f'push-test-{key}').delete()
+    sent=[]
+    monkeypatch.setattr(adapters.messaging,'send',lambda message:sent.append(message))
+    adapters.deliver_push(key)
+    assert ref.get().to_dict()['pushPending'] is True
+    assert not sent
+    db.collection('device-tokens').document(f'push-test-{key}').set({'userId':uid,'token':'synthetic-new-device'})
+    adapters.deliver_push(key)
+    assert ref.get().to_dict()['pushPending'] is False
+    assert len(sent)==1
+    assert sent[0].android.notification.tag==str(key)
+    assert sent[0].android.notification.sticky is True
+
+
+def test_push_with_only_expired_devices_remains_pending(monkeypatch,push_employees):
+    from app.store import db
+    key,ref=_push_fixture(monkeypatch,push_employees(),registered=True)
+    def expired(message):
+        raise adapters.messaging.UnregisteredError('Synthetic expired token')
+    monkeypatch.setattr(adapters.messaging,'send',expired)
+    adapters.deliver_push(key)
+    assert ref.get().to_dict()['pushPending'] is True
+    assert not db.collection('device-tokens').document(f'push-test-{key}').get().exists
+
+
 def test_checkout_reminder_once_after_nine_hours(monkeypatch):
     from datetime import datetime, timedelta, timezone
     from app import push_worker

@@ -263,22 +263,28 @@ def _claim_push(ref):
 
 
 def _send_push(item):
-    """Send to every device the recipient has registered; True if any send
-    failed transiently (so the push stays pending for a retry)."""
+    """Keep pending until at least one registered device accepts the push.
+
+    An empty token list is not a successful delivery: registration may still
+    be recovering on the phone. The existing age limit bounds these retries.
+    """
     failed=False
+    delivered=False
     payload={k:str(item[k]) for k in ('type','projectId','moduleId','milestonePercent') if item.get(k) is not None}
     payload['notificationId']=str(item['id'])
-    android=messaging.AndroidConfig(priority='high',notification=messaging.AndroidNotification(channel_id='comten_notifications'))
+    android=messaging.AndroidConfig(priority='high',notification=messaging.AndroidNotification(
+        channel_id='comten_notifications', tag=str(item['id']), sticky=True))
     for token in all_rows('device-tokens',[('userId',item['userId'])]):
         try:
             messaging.send(messaging.Message(token=token['token'],notification=messaging.Notification(title=item['title'],body=item['message']),data=payload,android=android))
+            delivered=True
         except messaging.UnregisteredError:
             # Delete only this registered document; never another account's token.
             db.collection('device-tokens').document(str(token['id'])).delete()
         except Exception:
             failed=True
             logging.getLogger('crompton').warning('Push delivery failed; will retry')
-    return failed
+    return failed or not delivered
 
 
 def deliver_push(key):

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'firebase_environment.dart';
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -40,9 +41,9 @@ Future<void> firebaseBackgroundMessage(RemoteMessage message) async {
 /// app is in the foreground (FCM doesn't auto-display those), and deep-links
 /// to the right screen when a notification is tapped in any app state - see
 /// [NotificationNavigator]. A single instance lives for the app's lifetime;
-/// [initialize] runs once in main.dart, [syncToken] runs once per sign-in
-/// (see `RoleDashboardScaffold`), and [unregister] runs on logout.
-class PushNotificationService {
+/// [initialize] runs once in main.dart, [syncToken] runs after authentication
+/// and retries on resume, and [unregister] runs on logout.
+class PushNotificationService with WidgetsBindingObserver {
   PushNotificationService._();
 
   static final PushNotificationService instance = PushNotificationService._();
@@ -70,6 +71,9 @@ class PushNotificationService {
   String? _registeredUid;
   StreamSubscription<String>? _tokenSubscription;
   Future<void>? _registration;
+  Future<void>? _tokenSync;
+  String? _employeeCode;
+  int _syncGeneration = 0;
   static const _deviceStorage=FlutterSecureStorage();
   static const _resetKey='push_token_requires_reset';
 
@@ -105,7 +109,7 @@ class PushNotificationService {
 
     // Foreground: FCM delivers the message but never shows anything itself,
     // so we show it manually via flutter_local_notifications.
-    FirebaseMessaging.onMessage.listen(_showForegroundNotification);
+    FirebaseMessaging.onMessage.listen(showForegroundNotification);
 
     // Backgrounded (app alive, user taps the OS-rendered notification).
     FirebaseMessaging.onMessageOpenedApp.listen((message) {
@@ -122,6 +126,15 @@ class PushNotificationService {
       _pendingInitialMessageData = initialMessage.data;
     }
     _initialized = true;
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final employeeCode = _employeeCode;
+    if (state == AppLifecycleState.resumed && employeeCode != null) {
+      unawaited(syncToken(employeeCode));
+    }
   }
 
   Map<String, dynamic>? _pendingInitialMessageData;
@@ -142,12 +155,23 @@ class PushNotificationService {
 
   /// Registers (and keeps registered, across token refreshes) this device
   /// for [employeeCode] - call once the user is signed in.
-  Future<void> syncToken(String employeeCode) async {
+  Future<void> syncToken(String employeeCode) {
+    _employeeCode = employeeCode;
+    // Login routing and lifecycle resume may request the same sync together.
+    return _tokenSync ??= _syncTokenSafely(employeeCode).whenComplete(() {
+      _tokenSync = null;
+    });
+  }
+
+  Future<void> _syncTokenSafely(String employeeCode) async {
+    final generation = _syncGeneration;
     await requestPermission();
+    if (generation != _syncGeneration) return;
     try { await _syncToken(employeeCode); }
     on FirebaseException catch(e) { debugPrint('Push registration unavailable: ${e.code}'); }
     on PlatformException catch(e) { debugPrint('Push registration unavailable: ${e.code}'); }
     on TimeoutException { debugPrint('Push registration timed out'); }
+    on Exception { debugPrint('Push registration failed; will retry on resume'); }
   }
 
   /// Shows the system "Allow notifications?" prompt (Android 13+) if it
@@ -167,6 +191,7 @@ class PushNotificationService {
   }
 
   Future<void> _syncToken(String employeeCode) async {
+    final generation = _syncGeneration;
     if (FirebaseEnvironment.emulator || kIsWeb) return;
     await initialize();
     if(!_initialized) return;
@@ -176,41 +201,55 @@ class PushNotificationService {
     if(uid==null) return;
     final previousUid=await _deviceStorage.read(key:'push_registered_uid');
     if(previousUid!=null && previousUid!=uid) await _deviceStorage.write(key:_resetKey,value:'true');
+    if (generation != _syncGeneration || FirebaseAuth.instance.currentUser?.uid != uid) return;
     await FirebaseMessaging.instance.setAutoInitEnabled(true);
     if(await _deviceStorage.read(key:_resetKey)=='true') {
       await FirebaseMessaging.instance.deleteToken().timeout(const Duration(seconds:10));
       await _deviceStorage.delete(key:_resetKey);
     }
     await _tokenSubscription?.cancel();
-    final token = await FirebaseMessaging.instance.getToken().timeout(const Duration(seconds:10));
-    if (token != null) {
-      await (_registration=_registerToken(employeeCode, token,uid));
-    }
+    if (generation != _syncGeneration || FirebaseAuth.instance.currentUser?.uid != uid) return;
+    // Keep listening even if the initial getToken call fails while offline.
     _tokenSubscription = FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+      if (generation != _syncGeneration) return;
       _registration=_registerToken(employeeCode, newToken,uid).catchError((Object error) {debugPrint('Push token refresh registration failed');});
     });
+    final token = await FirebaseMessaging.instance.getToken().timeout(const Duration(seconds:10));
+    if (token != null && generation == _syncGeneration) {
+      await (_registration=_registerToken(employeeCode, token,uid));
+    }
   }
 
   Future<void> _registerToken(String employeeCode, String token,String? uid) async {
     if(uid==null || FirebaseAuth.instance.currentUser?.uid!=uid) return;
     if (_registeredToken == token && _registeredUid==uid) return;
     final result = await _repository.registerDeviceToken(token);
+    if (!result.success) {
+      throw Exception('Device registration was not accepted');
+    }
     if (result.success && FirebaseAuth.instance.currentUser?.uid==uid) {
       _registeredToken = token;
       _registeredUid=uid;
       await _deviceStorage.write(key:'push_registered_uid',value:uid);
       await PreferenceUtil.setFcmToken(employeeCode, token);
+      // Correlate this phone with server registration without logging a token.
+      debugPrint('Push device registration confirmed: ${sha256.convert(utf8.encode(token))}');
     }
   }
 
   /// Unregisters this device's token - call before clearing the session on
   /// logout so a signed-out device stops receiving pushes for this account.
   Future<void> unregister(String employeeCode) async {
+    _employeeCode = null;
+    _syncGeneration++;
+    try { await _tokenSync?.timeout(const Duration(seconds:20)); }
+    on Exception { debugPrint('Pending push sync ended during logout'); }
     await _tokenSubscription?.cancel(); _tokenSubscription=null;
     try { await _registration?.timeout(const Duration(seconds:10)); }
     on TimeoutException { debugPrint('Pending push registration timed out during logout'); }
     on FirebaseException { debugPrint('Pending push registration failed during logout'); }
     on PlatformException { debugPrint('Pending push registration failed during logout'); }
+    on Exception { debugPrint('Pending push registration failed during logout'); }
     _registration=null;
     if (FirebaseEnvironment.emulator || kIsWeb) return;
     final token = _registeredToken ?? await PreferenceUtil.getFcmToken(employeeCode);
@@ -230,7 +269,8 @@ class PushNotificationService {
     _registeredUid=null;
   }
 
-  Future<void> _showForegroundNotification(RemoteMessage message) async {
+  @visibleForTesting
+  Future<void> showForegroundNotification(RemoteMessage message) async {
     final notification = message.notification;
     if (notification == null) return;
 
@@ -247,7 +287,8 @@ class PushNotificationService {
         : null;
 
     await _localNotifications.show(
-      message.hashCode,
+      // Android IDs are signed 32-bit; the tag preserves the full server ID.
+      (int.tryParse(message.data['notificationId']?.toString() ?? '') ?? message.hashCode) & 0x7fffffff,
       notification.title,
       notification.body,
       NotificationDetails(
@@ -258,6 +299,9 @@ class PushNotificationService {
               'Timesheet, project, attendance and approval alerts',
           importance: Importance.high,
           priority: Priority.high,
+          // Keep the alert in the tray until the user explicitly dismisses it.
+          autoCancel: false,
+          tag: message.data['notificationId']?.toString(),
           color: accentColor,
           colorized: accentColor != null,
         ),

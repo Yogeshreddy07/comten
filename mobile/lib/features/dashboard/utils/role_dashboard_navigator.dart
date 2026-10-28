@@ -60,6 +60,11 @@ class RoleDashboardNavigator {
     final notificationViewModel = context.read<NotificationViewModel>();
     final authViewModel = context.read<AuthViewModel>();
     final employeeCode = authViewModel.employeeCode;
+    // Register before the unread/walkthrough gate: users may stay on that
+    // screen without ever constructing a dashboard.
+    if (employeeCode.isNotEmpty) {
+      unawaited(PushNotificationService.instance.syncToken(employeeCode));
+    }
     final shouldCheckWalkthrough = !isAppUnlock && employeeCode.isNotEmpty;
 
     // Kicked off together rather than one after the other - the walkthrough
