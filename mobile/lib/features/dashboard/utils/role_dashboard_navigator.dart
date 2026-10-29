@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../core/network/api_service.dart';
 
 import '../../../core/services/push_notification_service.dart';
 import '../../../core/utils/navigation_guard.dart';
@@ -56,6 +57,10 @@ class RoleDashboardNavigator {
     bool isAppUnlock = false,
   }) async {
     if (!context.canPushRoute) return;
+
+    if (role == UserRole.captain || role == UserRole.projectManager) {
+      unawaited(ApiService.preconnect());
+    }
 
     final notificationViewModel = context.read<NotificationViewModel>();
     final authViewModel = context.read<AuthViewModel>();

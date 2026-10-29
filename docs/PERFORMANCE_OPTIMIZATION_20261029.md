@@ -34,6 +34,10 @@ splash timing, identity restoration and app-lock routing untouched.
   and revision guards prevent stale completions overwriting a confirmed save
   or repopulating another session. Duplicate saves are refused while pending;
   errors release progress. Success still requires an acknowledged server write.
+- Manager app entry starts one nonblocking health request per process on the
+  shared HTTP client, overlapping connection setup with entry screens. It adds
+  no Firestore reads and never gates navigation; failure is silently ignored.
+  No repeated health polling or automatic mutation retry was introduced.
 - Successful backend PUT requests now invalidate local data snapshots, matching
   POST/DELETE behavior and preventing stale post-edit reads.
 
@@ -82,23 +86,75 @@ The saved synthetic controller credentials were used without resetting them.
 
 ## Android artifact and device
 
-Candidate **1.0.10 / versionCode 12**, package `com.crompton.pms.frontend`.
+Candidate **1.0.10 / versionCode 13**, package `com.crompton.pms.frontend`.
 APK: `.local/performance-20261029/Crompton-PMS-1.0.10-performance.apk`.
-SHA-256: `067f5da1e87b5114c5f1862576a94e0bf0cdbd452f48fa6dfff52a6185581b26`.
+SHA-256: `e5cb6243d9a77c560e6b3d1de4150e66e3adbf688d7b7f52d34b4908e5ca2f66`.
 Signing certificate SHA-256:
 `99207a2b2f5a3f589f7ec6f2109be80cb585d713e828161359f8621da5c71a80`.
 
 Installed with `adb install -r` on OPPO CPH2471 (`ZPQKY94PCMFMTSKN`), upgrading
-1.0.4/code 5. Package UID **10343** and first-install date
+1.0.4/code 5 (initial update code 12, final connection-preparation build code 13). Package UID **10343** and first-install date
 **2026-10-24 17:35:16** were unchanged. App data was not cleared or uninstalled.
 The original installed APK was retained privately. The updated app launches to
-Welcome. Authenticated navigation/timing remains pending the dashboard login.
+Welcome. Login with the existing synthetic controller account succeeded,
+including the unread-notification gate and its Continue action. Notifications
+were not marked read for the probe.
+
+Three read-only navigation runs per screen on the updated phone:
+
+| Screen | Median observed ready | Maximum |
+|---|---:|---:|
+| Projects | 1,000 ms | 2,156 ms |
+| Employee Management | 1,157 ms | 1,937 ms |
+| Billing Management | 1,078 ms | **9,219 ms** |
+| Activities | 953 ms | 1,047 ms |
+
+These are automation-inclusive upper bounds. Repeated billing entries can
+show retained content before the new server response arrives; they are not
+fresh-server timings. The first billing entry was still slow and remains an
+open issue. All twelve screen entries passed, and billing was additionally
+checked for delayed refresh errors. There was no comparable phone baseline
+run, so this table does not establish a phone before/after improvement.
+A temporary, private diagnostic build enabled the existing safe stage traces
+on the same signed app. Before connection preparation, a first native Billing
+GET took **4,067.7 ms**, of which **4,048.0 ms** was HTTP and **6.6 ms** was token
+retrieval. Three warm native GETs took **2,219.8 / 2,322.2 / 2,540.2 ms** (sorted).
+This isolates most remaining wait to the request/response path, not Firebase
+transport dispatch or token retrieval. It does not measure every UI/JSON stage. It does not separate DNS, TLS and server
+processing or explain every part of the earlier 9.2-second observation.
+
+After adding the nonblocking health preparation, one first native Billing GET
+completed in **3,234.8 ms**, with **3,228.3 ms** in HTTP and **5.5 ms** in token
+retrieval. This is a single observation, not a controlled distribution or proof
+that all first loads improved. Fresh network responses still take seconds.
+Final build code 13 restores release tracing disablement; diagnostic builds
+are not handoff artifacts.
+
+A shell-level network probe was inconclusive (one resolver failure and one
+stdin/process timeout); it is not evidence of an application DNS fault. Its
+remote diagnostic file was removed. No network/device settings were changed.
+
+The reusable `scripts/benchmark-mobile-navigation.py` refuses to operate unless
+the app is foreground and its unlocked dashboard is visible. It never enters
+credentials, handles a PIN or changes business records.
 
 ## Rollout and remaining limits
 
-The mobile update is installed. Hosted backend rollout and its after-measurement
-are tracked below as they complete. Local evidence does not establish that the
-hosted backend is updated. Private logs and timing JSON are under
+The mobile update is installed. Commit `9697ade` was pushed to the existing main
+branch, triggering the configured Railway deployment. GitHub's
+`vivacious-dream - comten` status reports success for deployment
+`3711849f-13bd-4d1a-8ca7-96f32ef42a35`. Its application health reports the
+expected development project. No hosting settings were changed.
+
+Five authenticated read-only hosted billing requests after deployment measured
+**2,098.7 ms median**, **2,466.0 ms maximum**, seven rows and zero errors.
+Compared with the three before samples, the median fell **79.1%**. This is
+workstation-to-hosted-API timing, not a phone rendering measurement. The fresh
+response is still about two seconds; no subsecond fresh-server claim is made.
+The response exactly matched an independent legacy calculation against the
+same live database. Anonymous access returned 401; an authenticated employee
+returned 403. All probes used existing synthetic accounts without resets or
+business writes. Private logs and timing JSON are under
 `.local/performance-20261029/`.
 
 There is no claim of zero network latency or certification of every workflow.

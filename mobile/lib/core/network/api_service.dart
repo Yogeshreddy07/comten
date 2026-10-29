@@ -37,7 +37,21 @@ class ApiService {
       );
   static final _firebase = FirebaseTransport();
   static final http.Client _client = PerformanceHttpClient(http.Client());
+  static Future<void>? _connectionWarmup;
   static String get baseUrl => ApiConstants.baseUrl;
+
+  /// One public health request per process. Call without awaiting it so DNS,
+  /// TLS and connection setup can overlap the manager's entry screens. No
+  /// credentials, business data or Firebase reads are needed for this probe.
+  static Future<void> preconnect() => _connectionWarmup ??= _preconnect();
+  static Future<void> _preconnect() async {
+    try {
+      await _client.get(Uri.parse('$baseUrl/').resolve('../health'))
+          .timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Optional preparation must never affect navigation or show an error.
+    }
+  }
 
   static const _timeout = Duration(seconds: ApiConstants.requestTimeoutSeconds);
 
