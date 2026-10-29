@@ -163,6 +163,7 @@ class ApiService {
           body: jsonEncode(body),
         )
         .timeout(_timeout);
+    if (response.statusCode < 300) await AccountCache.instance.invalidateData();
     return _checkSession(response);
   }
 

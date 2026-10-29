@@ -1,4 +1,5 @@
 import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
 import {test, before, after} from 'node:test';
 import {initializeTestEnvironment,assertSucceeds,assertFails} from '@firebase/rules-unit-testing';
 import {doc,setDoc,getDoc,getDocs,collection,query,where,limit,updateDoc,Timestamp,serverTimestamp,writeBatch} from 'firebase/firestore';
@@ -43,6 +44,9 @@ test('lead picker can read assigned modules without reading employee profiles',a
  // Historical module members need not be present in the current peer roster.
  await assertFails(getDoc(doc(db,'employees','14')));
  const snapshot=await assertSucceeds(getDocs(query(collection(db,'modules'),where('memberIds','array-contains',13),limit(200))));
+ // Project-scoped module loading keeps the mandatory membership restriction.
+ const scoped=await assertSucceeds(getDocs(query(collection(db,'modules'),where('memberIds','array-contains',13),where('projectId','==',200),limit(200))));
+ assert.equal(scoped.size,snapshot.size);
  if(!snapshot.docs.some(d=>d.id==='202')) throw new Error('Assigned module missing');
  await assertFails(getDocs(query(collection(db,'modules'),limit(200))));
 });

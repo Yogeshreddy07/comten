@@ -1,4 +1,5 @@
 import '../services/performance_trace.dart';
+import 'request_reads.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -12,6 +13,11 @@ import '../constant/api_constants.dart';
 /// Adapts the preserved screen contracts to direct Firebase SDK operations.
 /// A null result delegates only privileged operations to the trusted backend.
 class FirebaseTransport {
+  static final _readsKey = Object();
+  Future<DocumentSnapshot<Map<String,dynamic>>> readDocument(String path) {
+    final reads = Zone.current[_readsKey] as RequestReads<DocumentSnapshot<Map<String,dynamic>>>?;
+    return reads?.read(path) ?? db.doc(path).get();
+  }
   final db=FirebaseFirestore.instance;
   final auth=FirebaseAuth.instance;
   Map<String,dynamic>? _profile;
@@ -55,7 +61,31 @@ class FirebaseTransport {
     await AccountCache.instance.put('auth_profile',data);
     return data;
   }
-  Future<http.Response?> request(String method,String endpoint,Map<String,dynamic> body) async {
+  Future<http.Response?> request(String method,String endpoint,Map<String,dynamic> body) =>
+      runZoned(() => _request(method, endpoint, body), zoneValues: {
+        _readsKey: RequestReads<DocumentSnapshot<Map<String,dynamic>>>((path) => db.doc(path).get()),
+      });
+
+  // These routes always use backend authorization. Do not perform a second,
+  // redundant mobile profile read before dispatching them.
+  static bool backendOnly(String method, String endpoint) {
+    final parts = Uri.parse(endpoint).pathSegments;
+    if (parts.isEmpty || parts.first == 'auth') return false;
+    final collection = parts.first;
+    if (method == 'GET') {
+      return !['users', 'employees', 'projects', 'modules', 'activities',
+        'attendance', 'work-logs', 'notifications', 'module-change-requests',
+        'project-deactivation-requests', 'billing-status-change-requests',
+        'delay-requests'].contains(collection) || endpoint == '/employees/validate-identity';
+    }
+    return !(collection == 'attendance' ||
+        (collection == 'work-logs' && method == 'POST' && parts.length == 1) ||
+        (collection == 'activities' && ['POST', 'PUT'].contains(method)) ||
+        (collection == 'projects' && method == 'PUT' && parts.length == 2) ||
+        (collection == 'notifications' && (parts.contains('device-tokens') || parts.last == 'read')));
+  }
+
+  Future<http.Response?> _request(String method,String endpoint,Map<String,dynamic> body) async {
     final cacheRevision=AccountCache.instance.revision;
     final uri=Uri.parse(endpoint),parts=Uri.parse(endpoint).pathSegments;
     if(parts.isEmpty) return null;
@@ -88,6 +118,10 @@ class FirebaseTransport {
         await u.updatePassword(body['newPassword'] as String);return response(null);
       }
       if(collection=='auth') return null;
+      if (backendOnly(method, endpoint)) {
+        if (method != 'GET') await AccountCache.instance.invalidateData();
+        return null;
+      }
       // Contact validation is authoritative, read-only backend work.
       if(endpoint=='/employees/validate-identity') return null;
       // These writes are authorized by the backend. Avoid a redundant profile
@@ -172,6 +206,11 @@ class FirebaseTransport {
       }
       if(collection=='notifications') query=query.where('userId',isEqualTo:id);
       if(['projects','modules'].contains(collection)&&!manager) query=query.where('memberIds',arrayContains:id);
+      // The existing projectId/memberIds index supports this scope for staff
+      // too. Fetch only this project's modules instead of the entire roster.
+      if(collection=='modules' && uri.queryParameters['projectId']!=null) {
+        query=query.where('projectId',isEqualTo:int.tryParse(uri.queryParameters['projectId']!) ?? uri.queryParameters['projectId']);
+      }
       if(collection=='work-logs' && (parts.contains('my') || !manager)) query=query.where(parts.contains('my')?'employeeId':'teamLeadId',isEqualTo:id);
       if(collection.endsWith('requests')&&!manager) query=query.where('requestedById',isEqualTo:id);
       if(uri.queryParameters['after']!=null) {
@@ -267,7 +306,7 @@ class FirebaseTransport {
       final reads=<String,Future<DocumentSnapshot<Map<String,dynamic>>>>{};
       void read(String collection,dynamic id) {
         final path='$collection/$id';
-        reads.putIfAbsent(path,()=>db.doc(path).get());
+        reads.putIfAbsent(path,()=>readDocument(path));
       }
       if(row['teamLeadId']!=null) read('employees',row['teamLeadId']);
       if(!summaryOnly) {
@@ -298,22 +337,26 @@ class FirebaseTransport {
     final ref=db.collection('attendance').doc(dayId.toString());
     if(parts.last=='team') {
       final modules=await pages(db.collection('modules').where('memberIds',arrayContains:p['id']));
+      final led = modules.map((s) => s.data()).where((m) =>
+          m['teamLeadId']==p['id'] && m['active']==true && m['deleted']!=true).toList();
+      final parents = await Future.wait(led.map((m) =>
+          readDocument('projects/${m['projectId']}')));
       final ids=<int>{};
-      for(final snapshot in modules) {
-        final m=snapshot.data();
-        if(m['teamLeadId']!=p['id'] || m['active']!=true || m['deleted']==true) continue;
-        final parent=(await db.collection('projects').doc(m['projectId'].toString()).get()).data();
-        if(parent?['active']==true && parent?['deleted']!=true) ids.addAll((m['memberIds'] as List).cast<int>());
+      for (var i=0; i<led.length; i++) {
+        final parent=parents[i].data();
+        if(parent?['active']==true && parent?['deleted']!=true) {
+          ids.addAll((led[i]['memberIds'] as List).cast<int>());
+        }
       }
       final date=DateTime.parse(uri.queryParameters['date']??now.toIso8601String().substring(0,10));
-      final result=<Map<String,dynamic>>[];
-      for(final id in ids.where((id)=>id!=p['id'])) {
-        final employee=(await db.collection('employees').doc(id.toString()).get()).data();
-        if(employee==null) continue;
+      final rows = await Future.wait(ids.where((id)=>id!=p['id']).map((id) async {
+        final employee=(await readDocument('employees/$id')).data();
+        if(employee==null) return null;
         final key=id*100000000+date.year*10000+date.month*100+date.day;
-        final a=(await db.collection('attendance').doc(key.toString()).get()).data();
-        result.add({'employeeId':id,'employeeCode':employee['employeeCode'],'employeeName':employee['name'],'attendanceDate':date.toIso8601String().substring(0,10),'status':a==null?'NOT_CHECKED_IN':a['outTime']==null?'CHECKED_IN':'CHECKED_OUT',...?a});
-      }
+        final a=(await readDocument('attendance/$key')).data();
+        return <String,dynamic>{'employeeId':id,'employeeCode':employee['employeeCode'],'employeeName':employee['name'],'attendanceDate':date.toIso8601String().substring(0,10),'status':a==null?'NOT_CHECKED_IN':a['outTime']==null?'CHECKED_IN':'CHECKED_OUT',...?a};
+      }));
+      final result=rows.whereType<Map<String,dynamic>>().toList();
       return response(result);
     }
     if(method=='GET') return response((await ref.get()).data());
@@ -345,15 +388,22 @@ class FirebaseTransport {
     final dayId=(p['id'] as int)*100000000+date.year*10000+date.month*100+date.day;
     final key=int.parse(sha256.convert(utf8.encode('${p['id']}:${jsonEncode(body)}')).toString().substring(0,13),radix:16).toString();
     final billIds=List<int>.from(body['billableActivityIds'] as List? ?? []), nonIds=List<int>.from(body['nonBillableActivityIds'] as List? ?? []);
-    final activities=<String,List<Map<String,dynamic>>>{};
+    // Validate all selections before issuing reads, then share overlapping
+    // activity documents and fetch independent records concurrently.
     for(final category in ['billable','nonBillable']) {
-      activities[category]=[];
       for(final id in category=='billable'?billIds:nonIds) {
         if(!(m['${category}ActivityIds'] as List? ?? []).contains(id)) throw StateError('Activity is not configured for this module');
-        final a=(await db.collection('activities').doc(id.toString()).get()).data();
-        if(a!=null) activities[category]!.add(a);
       }
     }
+    final activityIds={...billIds,...nonIds}.toList();
+    final documents=await Future.wait(activityIds.map((id)=>readDocument('activities/$id')));
+    final records={for(var i=0;i<activityIds.length;i++) activityIds[i]:documents[i].data()};
+    final activities=<String,List<Map<String,dynamic>>>{
+      for(final category in ['billable','nonBillable']) category:[
+        for(final id in category=='billable'?billIds:nonIds)
+          if(records[id]!=null) records[id]!,
+      ],
+    };
     final row={'id':int.parse(key),'dayId':dayId,'dayTimestamp':Timestamp.fromDate(DateTime.utc(date.year,date.month,date.day)),'employeeId':p['id'],'employeeCode':p['employeeCode'],'employeeName':p['name'],'moduleId':m['id'],'moduleName':m['moduleName'],'projectId':m['projectId'],'projectCode':m['projectCode'],'projectName':m['projectName'],'teamLeadId':m['teamLeadId'],'workDate':body['workDate'],'workDone':body['workDone'],'billableDurationSeconds':bill,'nonBillableDurationSeconds':non,'billableActivityIds':billIds,'nonBillableActivityIds':nonIds,'billableActivities':activities['billable'],'nonBillableActivities':activities['nonBillable'],'approvalStatus':'PENDING','createdAt':FieldValue.serverTimestamp()};
     final ref=db.collection('work-logs').doc(key),ledger=db.collection('work-log-days').doc(dayId.toString());
     Map<String,dynamic>? saved;

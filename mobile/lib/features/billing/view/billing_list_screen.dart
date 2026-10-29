@@ -107,7 +107,13 @@ class _BillingListScreenState extends State<BillingListScreen>
         ),
       ),
       body: SafeArea(
-        child: _buildBody(context, viewModel),
+        child: Column(
+          children: [
+            if (viewModel.isRefreshing && viewModel.loadState == BillingLoadState.success)
+              const LinearProgressIndicator(),
+            Expanded(child: _buildBody(context, viewModel)),
+          ],
+        ),
       ),
     );
   }

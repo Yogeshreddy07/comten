@@ -2,7 +2,7 @@ from datetime import datetime,timezone
 from fastapi import APIRouter,Depends,HTTPException,Request
 from firebase_admin import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
-from .store import db,get,rows,all_rows,transact
+from .store import db,get,get_many,rows,all_rows,transact
 from .approvals import claim_pending,has_pending
 from .security import current_user,manager,require
 from .messaging import notify
@@ -17,16 +17,33 @@ router=APIRouter(prefix='/api')
 def billing_row(m):
     project=get('projects',m['projectId']) or {}
     lead=get('employees',m.get('teamLeadId')) if m.get('teamLeadId') else None
+    return billing_values(m, project, lead, has_pending('billing-status-change-requests',m['id']))
+
+
+def billing_values(m, project, lead, pending):
     status=m.get('billingStatus')
     editable=bool(m.get('active',True) and project.get('active') and not project.get('deleted'))
     stage='COMPLETED' if not editable or status=='FULL_PAYMENT_RECEIVED' else 'TO_BE_BILLED' if not status or status=='INVOICE_YET_TO_BE_RAISED' else 'PENDING'
-    return {**m,'moduleId':m['id'],'moduleStatus':effective_status(m) if editable else 'INACTIVE','status':status,'stage':stage,'editable':editable,'teamLeadName':lead.get('name') if lead else None,'updatedByName':m.get('updatedByName'),'reversionPending':has_pending('billing-status-change-requests',m['id'])}
+    return {**m,'moduleId':m['id'],'moduleStatus':effective_status(m) if editable else 'INACTIVE','status':status,'stage':stage,'editable':editable,'teamLeadName':lead.get('name') if lead else None,'updatedByName':m.get('updatedByName'),'reversionPending':pending}
 
 
 @router.get('/billing')
 def billing(user=Depends(current_user)):
     manager(user)
-    return {'success':True,'message':'Billing loaded','data':[billing_row(m) for m in all_rows('modules') if not m.get('deleted') and m.get('workStage')=='BILLING']}
+    modules=[m for m in all_rows('modules',[('workStage','BILLING')]) if not m.get('deleted')]
+    collection='billing-status-change-requests'
+    keys=set()
+    for m in modules:
+        keys.add(('projects',str(m['projectId'])))
+        if m.get('teamLeadId'): keys.add(('employees',str(m['teamLeadId'])))
+        keys.add(('pending-approvals',f"{collection}-{m['id']}"))
+    metadata=get_many(keys,fields=['active','deleted','name','requestId'])
+    locks={m['id']:metadata.get(('pending-approvals',f"{collection}-{m['id']}"),{}) for m in modules}
+    requests=get_many({(collection,str(lock['requestId'])) for lock in locks.values() if lock.get('requestId') is not None},fields=['approvalStatus'])
+    result=[billing_values(m,metadata.get(('projects',str(m['projectId'])),{}),
+        metadata.get(('employees',str(m.get('teamLeadId')))),
+        requests.get((collection,str(locks[m['id']].get('requestId'))),{}).get('approvalStatus')=='PENDING') for m in modules]
+    return {'success':True,'message':'Billing loaded','data':result}
 
 
 @router.put('/billing/{mid}')
