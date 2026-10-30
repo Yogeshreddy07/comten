@@ -308,3 +308,70 @@ because the app was no longer foreground; rerunning after reopening the app
 passed. No hosted business or notification records were modified. This repeats
 physical FCM delivery verification; it does not deploy or prove hosted project
 milestone generation, whose backend source still awaits deployment.
+
+## Project reminders and Edit Employee attachment - 30 October 2026
+
+Project progress reminders now trigger at 30%, 60%, 90%, and 100% of combined
+estimated module hours, using approved work seconds as before. A single update
+that crosses several levels queues only the highest newly crossed reminder:
+for example, a jump from 0% to 65% sends only 60%. All crossed levels are marked
+atomically, including skipped reminders, preserving once-only behavior across
+concurrent approvals and estimate changes. Existing milestone history is kept;
+old 25/50/75 markers do not block the new levels. Notification colors follow
+30% green, 60% yellow, and 90%/100% red.
+
+The Edit Employee app-bar attachment button is removed. Employee fields,
+identity validation, review/save, and shared attachment storage remain intact.
+
+The combined milestone/completion test also exposed overlapping progress and
+timesheet notification IDs when generated in the same clock tick. Timesheet
+alerts now use an ID above the progress alert range within that transaction;
+a fixed-clock regression covers the reproduced collision.
+
+Validation: 34 backend milestone/lifecycle tests passed on isolated local
+Auth/Firestore emulators; all 15 focused Flutter notification and employee
+validation/identity tests passed. No hosted deployment, APK build, phone update,
+or live messages were performed for this follow-up.
+
+Team leader recipient follow-up: confirmed that each active assigned team leader
+receives project milestone reminders, including leaders from other project
+modules and leaders absent from memberIds. Added an explicit regression covering
+all four thresholds and push queue flags for two distinct leaders; unrelated
+leaders are excluded. All 12 milestone tests passed on isolated local emulators.
+The existing recipient implementation already supports this; no additional
+production-code change or deployment was needed for this verification.
+
+## Persistent phone OTP attempt-count report - 30 October 2026
+
+The previous OTP classification fix was documented as local and undeployed;
+that fix cannot change the behavior of an older hosted backend. The current
+report does not include the live provider response or deployed source revision,
+so the exact tester failure is not established by the screenshot alone.
+
+A further reproducible classification gap was found: combined responses such
+as `OTP not matched or expired`, `OTP mismatch or expired`, `Incorrect OTP; OTP
+expired`, and `Invalid & expired OTP` still took the expiry path. The old parser
+only recognized selected invalid/wrong/incorrect forms separated by `or` or `/`.
+The adapter now treats mismatch language as an incorrect-code rejection, leaving
+the original challenge deadline intact and counting down the remaining tries.
+Explicit provider expiry and provider attempt exhaustion still retire the code.
+
+Phone attempt exhaustion now displays exactly `No attempts left. Please try
+again after some time.` The message stays exhausted after the deadline passes;
+legacy stored attempt-limit messages are normalized to the new wording. The
+activation screen recognizes the new terminal message and offers resend through
+the existing server cooldown/rate limits. The five-attempt limit and 600-second
+local challenge lifetime have not changed. This local deadline does not override
+an actual provider-side expiry or extend a retired code's validity.
+
+Validation: 97 provider/activation/focused phone checks passed, plus a new public
+activation-endpoint regression (98 total). That regression exercises the real
+provider adapter with mocked HTTP responses and verifies 2 attempts left, then
+1, then no attempts; a subsequent correct code cannot bypass the exhausted
+challenge. The account remains disabled and phone unverified. All five Flutter
+activation tests passed, including both final-attempt success and exhaustion;
+changed Dart files pass analysis. No live SMS, hosted deployment, APK build, or
+phone installation was performed. The live provider response and rollout still
+need verification before calling the tester's installed flow resolved.
+
+Provider contract reference: https://docs.msg91.com/otp-widget.

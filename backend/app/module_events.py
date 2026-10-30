@@ -5,7 +5,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from .store import db
 from .mobile_contracts import effective_status
 
-MILESTONES = (25, 50, 75, 100)
+MILESTONES = (30, 60, 90, 100)
 
 
 def worked_seconds(module):
@@ -47,15 +47,18 @@ def queue_progress_events(tx, before, after):
                        and estimate > 0 and previous * 100 < pct * estimate <= current * 100]
             if crossed:
                 recipients = recipients_for(tx, modules)
-                for pct in crossed:
-                    for person in recipients:
-                        records.append({
-                            'userId': person['id'], 'title': f'Project {pct}% completed',
-                            'message': f'{project["projectName"]} has reached {pct}% of its combined estimated hours.',
-                            'type': 'PROJECT_MILESTONE_REACHED', 'milestonePercent': pct,
-                            'projectId': after['projectId'], 'projectName': project['projectName'],
-                            'projectCode': project.get('projectCode', ''),
-                            'estimatedMinutes': estimate // 60, 'workedMinutes': current // 60})
+                # A single update may skip multiple levels. Notify only the
+                # latest level, but consume every crossed level atomically so
+                # skipped reminders cannot arrive later or repeat on recrossing.
+                pct = max(crossed)
+                for person in recipients:
+                    records.append({
+                        'userId': person['id'], 'title': f'Project {pct}% completed',
+                        'message': f'{project["projectName"]} has reached {pct}% of its combined estimated hours.',
+                        'type': 'PROJECT_MILESTONE_REACHED', 'milestonePercent': pct,
+                        'projectId': after['projectId'], 'projectName': project['projectName'],
+                        'projectCode': project.get('projectCode', ''),
+                        'estimatedMinutes': estimate // 60, 'workedMinutes': current // 60})
                 project_update = (project_ref, sorted(notified | set(crossed)))
     if effective_status(before) != 'COMPLETED' and effective_status(after) == 'COMPLETED':
         for person in recipients_for(tx, [after]):
@@ -73,3 +76,4 @@ def queue_progress_events(tx, before, after):
         tx.create(db.collection('notifications').document(str(key)), record | {
             'id': key, 'read': False, 'pushPending': True,
             'createdAt': datetime.now(timezone.utc).isoformat()})
+    return base + len(records) - 1 if records else 0

@@ -9,7 +9,6 @@ import '../../../shared/constants/app_dimensions.dart';
 import '../../../shared/constants/app_strings.dart';
 import '../../../shared/enums/user_role.dart';
 import '../../../shared/widgets/app_button.dart';
-import '../../../shared/widgets/files_screen.dart';
 import '../../../shared/widgets/app_dropdown.dart';
 import '../../../shared/widgets/app_text_field.dart';
 import '../../auth/model/api_result.dart';
@@ -232,12 +231,6 @@ class _AddEditEmployeeScreenState extends State<AddEditEmployeeScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_screenTitle),
-        actions: [if (widget.employee != null && (context.read<AuthViewModel>().role == UserRole.captain || [UserRole.employee, UserRole.teamLeader].contains(widget.employee!.role)))
-          IconButton(tooltip: 'Employee documents', icon: const Icon(Icons.attach_file), onPressed: () {
-            if (!context.canPushRoute) return;
-            Navigator.push(context, MaterialPageRoute(builder: (_) => FilesScreen(targetId: widget.employee!.id, categories: const {'employee_document':'Employee documents'})));
-          }),
-        ],
         centerTitle: true,
       ),
       body: SafeArea(

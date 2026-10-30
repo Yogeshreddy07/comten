@@ -59,7 +59,9 @@ class _ActivationPhoneScreenState extends State<ActivationPhoneScreen> {
     final result = await vm.verifyActivationPhoneOtp(_otp.text);
     if (!mounted) return;
     if (!result.success) {
-      if (result.message.startsWith('OTP has expired') || result.message.startsWith('Too many incorrect attempts')) {
+      if (result.message.startsWith('OTP has expired') ||
+          result.message.startsWith('Too many incorrect attempts') ||
+          result.message.startsWith('No attempts left')) {
         _timer?.cancel();
         setState(() => _remaining = 0);
       }

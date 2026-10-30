@@ -41,14 +41,14 @@ def milestones(pid):
 def test_combined_project_crosses_all_four_thresholds_once_for_managers_and_staff(graph):
     pid, mid, other = setup_project(graph)
     lead, employee, peer = graph[2:5]
-    for index, module in enumerate([mid, mid, other, other]):
-        approve(graph, module, 45 * 60, 100 + index)
-        assert get('projects', pid)['notifiedMilestones'] == [25, 50, 75, 100][:index + 1]
+    for index, module in enumerate([mid, other, mid, other]):
+        approve(graph, module, [54, 54, 54, 18][index] * 60, 100 + index)
+        assert get('projects', pid)['notifiedMilestones'] == [30, 60, 90, 100][:index + 1]
     notes = milestones(pid)
     assert {lead, employee, peer, lead + 60, lead + 61} <= {n['userId'] for n in notes}
     assert lead + 62 not in {n['userId'] for n in notes}
     for uid in {n['userId'] for n in notes}:
-        assert sorted(n['milestonePercent'] for n in notes if n['userId'] == uid) == [25, 50, 75, 100]
+        assert sorted(n['milestonePercent'] for n in notes if n['userId'] == uid) == [30, 60, 90, 100]
     assert all(n['pushPending'] and n['estimatedMinutes'] == 180 for n in notes)
     # Further approvals above 100% and ordinary module saves cannot repeat them.
     approve(graph, other, 60, 200)
@@ -56,29 +56,48 @@ def test_combined_project_crosses_all_four_thresholds_once_for_managers_and_staf
     assert len(milestones(pid)) == len(notes)
 
 
-def test_one_hour_of_three_reaches_only_25_percent_and_uses_second_precision(graph):
+def test_one_hour_of_three_reaches_only_30_percent_and_uses_second_precision(graph):
     pid, mid, _ = setup_project(graph)
-    approve(graph, mid, 45 * 60 - 1, 100)
+    approve(graph, mid, 54 * 60 - 1, 100)
     assert milestones(pid) == []
-    approve(graph, mid, 15 * 60 + 1, 101)
-    assert {n['milestonePercent'] for n in milestones(pid)} == {25}
+    approve(graph, mid, 6 * 60 + 1, 101)
+    assert {n['milestonePercent'] for n in milestones(pid)} == {30}
     assert all(n['workedMinutes'] == 60 for n in milestones(pid))
 
 
-def test_large_approval_crosses_several_thresholds_and_concurrent_approvals_do_not_duplicate(graph):
+def test_each_assigned_team_leader_gets_all_milestones_even_outside_member_list(graph):
+    pid, mid, other = setup_project(graph)
+    lead = graph[2]
+    second_lead, unrelated_lead = lead + 70, lead + 71
+    for uid in (second_lead, unrelated_lead):
+        graph[1]('employees', uid, {'role': 'TEAM_LEADER', 'active': True})
+    db.collection('modules').document(str(mid)).update({'memberIds': [graph[3]]})
+    db.collection('modules').document(str(other)).update({
+        'teamLeadId': second_lead, 'memberIds': [graph[4]]})
+    for index, module in enumerate([mid, other, mid, other]):
+        approve(graph, module, [54, 54, 54, 18][index] * 60, 100 + index)
+    notes = milestones(pid)
+    for uid in (lead, second_lead):
+        alerts = [n for n in notes if n['userId'] == uid]
+        assert sorted(n['milestonePercent'] for n in alerts) == [30, 60, 90, 100]
+        assert all(n['pushPending'] and not n['read'] for n in alerts)
+    assert unrelated_lead not in {n['userId'] for n in notes}
+
+
+def test_concurrent_approvals_do_not_duplicate(graph):
     pid, mid, other = setup_project(graph)
     # Pre-create the logs to avoid concurrent fixture bookkeeping.
     keys = [mid + 100, other + 101]
     for key, module in zip(keys, [mid, other]):
         graph[1]('work-logs', key, {'moduleId': module, 'moduleName': 'Design',
             'employeeId': graph[3], 'projectId': pid, 'workDate': '2026-10-30',
-            'approvalStatus': 'PENDING', 'billableDurationSeconds': 45 * 60})
+            'approvalStatus': 'PENDING', 'billableDurationSeconds': 54 * 60})
     with ThreadPoolExecutor(max_workers=2) as pool:
         responses = list(pool.map(lambda key: graph[0].put(f'/api/work-logs/{key}/approve', json={}), keys))
     assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
     notes = milestones(pid)
     for uid in {n['userId'] for n in notes}:
-        assert sorted(n['milestonePercent'] for n in notes if n['userId'] == uid) == [25, 50]
+        assert sorted(n['milestonePercent'] for n in notes if n['userId'] == uid) == [30, 60]
     assert graph[0].put(f'/api/work-logs/{keys[0]}/approve', json={}).status_code == 409
     assert len(milestones(pid)) == len(notes)
 
@@ -92,20 +111,53 @@ def test_inactive_or_unestimated_projects_do_not_emit_percentage_alerts(graph, i
     assert milestones(pid) == []
 
 
-def test_one_large_approval_queues_every_crossed_project_threshold(graph):
+@pytest.mark.parametrize('minutes,threshold,consumed', [
+    (117, 60, [30, 60]), (171, 90, [30, 60, 90]), (180, 100, [30, 60, 90, 100])])
+def test_large_approval_only_queues_highest_crossed_threshold(graph, minutes, threshold, consumed):
     pid, mid, _ = setup_project(graph)
-    approve(graph, mid, 135 * 60, 100)
+    approve(graph, mid, minutes * 60, 100)
     notes = milestones(pid)
+    assert notes
     for uid in {n['userId'] for n in notes}:
-        assert sorted(n['milestonePercent'] for n in notes if n['userId'] == uid) == [25, 50, 75]
+        assert [n['milestonePercent'] for n in notes if n['userId'] == uid] == [threshold]
+    assert get('projects', pid)['notifiedMilestones'] == consumed
+    approve(graph, mid, 1, 101)
+    assert len(milestones(pid)) == len(notes)
 
 
 def test_estimate_increase_does_not_repeat_already_notified_thresholds(graph):
     pid, mid, _ = setup_project(graph)
     approve(graph, mid, 90 * 60, 100)
     notes = milestones(pid)
-    assert {n['milestonePercent'] for n in notes} == {25, 50}
+    assert {n['milestonePercent'] for n in notes} == {30}
     db.collection('modules').document(str(mid)).update({'estimatedMinutes': 270})
     approve(graph, mid, 90 * 60, 101)
     assert len(milestones(pid)) == len(notes)
-    assert get('projects', pid)['notifiedMilestones'] == [25, 50]
+    assert get('projects', pid)['notifiedMilestones'] == [30]
+
+
+def test_exact_boundaries_legacy_markers_and_skipped_levels_do_not_replay(graph):
+    pid, mid, _ = setup_project(graph)
+    db.collection('projects').document(str(pid)).update({'notifiedMilestones': [25, 50]})
+    approve(graph, mid, 108 * 60 - 1, 100)
+    assert {n['milestonePercent'] for n in milestones(pid)} == {30}
+    approve(graph, mid, 1, 101)
+    notes = milestones(pid)
+    assert {n['milestonePercent'] for n in notes} == {30, 60}
+    assert get('projects', pid)['notifiedMilestones'] == [25, 30, 50, 60]
+    db.collection('modules').document(str(mid)).update({'estimatedMinutes': 270})
+    approve(graph, mid, 1, 102)
+    assert len(milestones(pid)) == len(notes)
+
+
+def test_progress_and_timesheet_alert_ids_do_not_collide_in_one_clock_tick(graph, monkeypatch):
+    pid, mid, _ = setup_project(graph)
+    import app.module_events as events
+    monkeypatch.setattr(events.time, 'time_ns', lambda: 1800000000000000000)
+    approve(graph, mid, 117 * 60, 100)
+    notes = milestones(pid)
+    assert notes and {n['milestonePercent'] for n in notes} == {60}
+    # Completion may add recipients; find the independent timesheet alert by its module.
+    alerts = [s.to_dict() for s in db.collection('notifications').where(
+        filter=FieldFilter('moduleId', '==', mid)).stream()]
+    assert len([n for n in alerts if n['type'] == 'TIMESHEET_APPROVED']) == 1

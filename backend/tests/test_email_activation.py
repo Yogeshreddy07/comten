@@ -155,6 +155,42 @@ def password_stage(client, person):
     return {'employeeCode':code,'phoneVerificationToken':response.json()['data']['phoneVerificationToken']}
 
 
+def test_activation_phone_reports_two_one_then_no_attempts_for_combined_provider_error(client, monkeypatch):
+    import httpx
+    monkeypatch.setattr(recovery.settings, 'recovery_hmac_key', 'synthetic-activation-test-key')
+    person = create(client)
+    request = password_stage(client, person)
+    monkeypatch.setattr(recovery.settings, 'msg91_widget_id', 'synthetic-widget')
+    assert client.post('/api/auth/signup/phone/send-otp', json=request).status_code == 200
+    ref = db.collection('phone-challenges').document(str(person['id']))
+    ref.update({'attempts': 2})
+    deadline = ref.get().to_dict()['expires']
+    for key, value in {'environment': 'development', 'allow_real_messages': True,
+                       'msg91_dispatch_enabled': True, 'msg91_auth_key': 'synthetic',
+                       'approved_sms_recipients': messaging.normalize_phone(person['phone'])}.items():
+        monkeypatch.setattr(recovery.settings, key, value)
+    calls = []
+    async def reject(method, url, **kwargs):
+        calls.append(url)
+        assert url.endswith('verifyOtp')
+        return httpx.Response(200, json={'type': 'error', 'message': 'OTP not matched or expired'})
+    monkeypatch.setattr(messaging, 'provider_request', reject)
+    try:
+        for message in ('Incorrect OTP. 2 attempts left.', 'Incorrect OTP. 1 attempt left.',
+                        'No attempts left. Please try again after some time.'):
+            response = client.post('/api/auth/signup/phone/verify-otp', json=request | {'otp': '000000'})
+            assert response.status_code == 401 and response.json()['message'] == message
+            assert ref.get().to_dict()['expires'] == deadline
+            assert not get('employees', person['id'])['phoneVerified']
+            assert auth.get_user(str(person['id'])).disabled
+        response = client.post('/api/auth/signup/phone/verify-otp', json=request | {'otp': '123456'})
+        assert response.status_code == 401
+        assert response.json()['message'] == 'No attempts left. Please try again after some time.'
+        assert len(calls) == 3
+    finally:
+        ref.delete()
+
+
 def test_login_locked_until_both_verifications_and_phone_proof_single_use(client):
     person=create(client);request=password_stage(client,person);uid=str(person['id'])
     assert get('employees',uid)['activationStatus']=='PHONE_PENDING'

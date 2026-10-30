@@ -11,6 +11,8 @@ from fastapi import HTTPException
 from .config import settings
 from .store import db, all_rows
 
+PHONE_OTP_LOCKED = 'No attempts left. Please try again after some time.'
+
 
 async def provider_request(method,url,**kwargs):
     # Only connection establishment failures are retryable: no HTTP request
@@ -190,13 +192,13 @@ async def verify_msg91(phone: str, otp: str, request_id: str):
         except (ValueError,AttributeError): reason=''
         # A retry cap can mention expiry too; preserve the actual lockout reason.
         if any(marker in reason for marker in ('limit','max','exceed')):
-            raise HTTPException(401,'Too many incorrect attempts. Tap Resend OTP to get a new code.')
-        # "Invalid OR expired" does not establish expiry. Treat that generic
-        # rejection as an incorrect code and let the challenge's deadline and
-        # attempt counter decide whether another try is allowed.
+            raise HTTPException(401,PHONE_OTP_LOCKED)
+        # Providers combine mismatch and expiry in several ways ("not matched
+        # or expired", "invalid/expired", "incorrect; expired"). None proves
+        # expiry. Let the challenge deadline and attempt counter decide instead.
         ambiguous = re.search(
-            r'\b(?:invalid|incorrect|wrong)\b.*(?:\bor\b|/).*\bexpired\b|'
-            r'\bexpired\b.*(?:\bor\b|/).*\b(?:invalid|incorrect|wrong)\b', reason)
+            r'\b(?:invalid|incorrect|wrong|mismatch(?:ed)?|'
+            r'not[\s_-]*(?:match(?:ed|ing)?|valid|correct))\b', reason)
         if 'expire' in reason and not ambiguous:
             raise HTTPException(401,'OTP has expired. Tap Resend OTP to get a new code.')
         raise HTTPException(401,'Invalid or expired verification code')

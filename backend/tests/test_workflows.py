@@ -220,7 +220,7 @@ def test_phone_otp_cooldown_expiry_attempts_and_replay(tokens):
         for left in (4,3,2,1,0):
             wrong=client.post('/api/auth/phone/verify',json={'otp':'000000'},headers=tokens['employee'])
             assert wrong.status_code==401
-            assert (f'{left} attempt' if left else 'Too many incorrect attempts') in wrong.json()['message']
+            assert (f'{left} attempt' if left else 'No attempts left') in wrong.json()['message']
         assert client.post('/api/auth/phone/verify',json={'otp':'123456'},headers=tokens['employee']).status_code==401
         assert ref.get().to_dict()['attempts']==5
         ref.update({'attempts':0,'expires':time.time()-1})
@@ -285,11 +285,11 @@ def test_provider_attempt_limit_retires_code_and_allows_immediate_resend(monkeyp
     try:
         with pytest.raises(HTTPException) as failure:
             asyncio.run(recovery.phone_verify({'otp':'000000'},user=person))
-        assert 'Too many incorrect attempts' in failure.value.detail
+        assert 'No attempts left' in failure.value.detail
         assert ref.get().to_dict()['busyUntil']==0 and ref.get().to_dict()['expires']==0
         with pytest.raises(HTTPException) as repeated:
             asyncio.run(recovery.phone_verify({'otp':'123456'},user=person))
-        assert 'Too many incorrect attempts' in repeated.value.detail
+        assert 'No attempts left' in repeated.value.detail
         response=asyncio.run(recovery.phone_send({'phone':person['phone']},user=person))
         assert response['success'] and ref.get().to_dict()['attempts']==0
         assert rate.get().to_dict()['count']==2
@@ -330,7 +330,12 @@ def test_delay_request_blocks_resubmission_until_decided(tokens):
 
 
 @pytest.mark.parametrize('complete', [True, False])
-def test_widget_generic_rejection_counts_down_without_premature_expiry(monkeypatch, complete):
+@pytest.mark.parametrize('reason', [
+    'Invalid or expired OTP', 'OTP not matched or expired',
+    'OTP mismatch or expired', 'OTP does not match or has expired',
+    'Incorrect OTP; OTP expired', 'Invalid & expired OTP',
+    'OTP not valid or expired'])
+def test_widget_generic_rejection_counts_down_without_premature_expiry(monkeypatch, complete, reason):
     """Exercise the real provider adapter and challenge counter together."""
     import asyncio
     import httpx
@@ -352,7 +357,7 @@ def test_widget_generic_rejection_counts_down_without_premature_expiry(monkeypat
             return httpx.Response(200, json={'type': 'success', 'message': '919000000089'})
         if kwargs['json']['otp'] == '123456':
             return httpx.Response(200, json={'type': 'success', 'message': 'synthetic-access-token'})
-        return httpx.Response(200, json={'type': 'error', 'message': 'Invalid or expired OTP'})
+        return httpx.Response(200, json={'type': 'error', 'message': reason})
     monkeypatch.setattr(messaging, 'provider_request', provider)
     employee.set(person | {'phoneVerified': False})
     deadline = time.time() + 600
@@ -373,12 +378,35 @@ def test_widget_generic_rejection_counts_down_without_premature_expiry(monkeypat
             assert result['success'] and get('employees', uid)['phoneVerified'] is True
             assert ref.get().to_dict()['state'] == 'CONSUMED'
         else:
-            with pytest.raises(HTTPException, match='Too many incorrect attempts'):
+            with pytest.raises(HTTPException, match='No attempts left'):
                 asyncio.run(recovery.phone_verify({'otp': '000000'}, user=person))
-            with pytest.raises(HTTPException, match='Too many incorrect attempts'):
+            with pytest.raises(HTTPException, match='No attempts left'):
                 asyncio.run(recovery.phone_verify({'otp': '123456'}, user=person))
+            assert len(calls) == 5
+            # Exhaustion must not turn into expiry when the deadline later passes.
+            ref.update({'expires': time.time() - 1})
+            with pytest.raises(HTTPException, match='No attempts left'):
+                asyncio.run(recovery.phone_verify({'otp': '000000'}, user=person))
             assert len(calls) == 5
             assert get('employees', uid)['phoneVerified'] is False
     finally:
         ref.delete()
         employee.delete()
+
+
+def test_phone_real_expiry_before_attempt_limit_is_not_counted_as_incorrect(monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from app import recovery
+    uid = time.time_ns() // 1000
+    ref = db.collection('phone-challenges').document(str(uid))
+    ref.set({'state': 'SENT', 'expires': time.time() - 1, 'attempts': 3})
+    async def forbidden(*args):
+        pytest.fail('Expired challenge must not reach the SMS provider')
+    monkeypatch.setattr(recovery, 'verify_msg91', forbidden)
+    try:
+        with pytest.raises(HTTPException, match='OTP has expired'):
+            asyncio.run(recovery.phone_verify({'otp': '000000'}, user={'id': uid}))
+        assert ref.get().to_dict()['attempts'] == 3
+    finally:
+        ref.delete()

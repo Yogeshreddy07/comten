@@ -7,7 +7,7 @@ from firebase_admin import auth,firestore
 from .config import settings
 from .security import current_user
 from .store import db,get,rows,transact
-from .messaging import email,send_msg91,verify_msg91,normalize_phone
+from .messaging import email,send_msg91,verify_msg91,normalize_phone,PHONE_OTP_LOCKED
 from .models import valid_password
 
 router=APIRouter(prefix='/api')
@@ -142,9 +142,11 @@ async def phone_verify(body: dict,user=Depends(current_user)):
     def claim(tx):
         row=ref.get(transaction=tx).to_dict()
         if not row or row.get('state')!='SENT': return 'OTP has expired. Tap Resend OTP to get a new code.'
-        if row.get('retiredMessage'): return row['retiredMessage']
+        if row.get('retiredMessage'):
+            return PHONE_OTP_LOCKED if row['retiredMessage'].startswith('Too many incorrect attempts') else row['retiredMessage']
+        # Exhaustion remains exhaustion even after the original deadline passes.
+        if row['attempts']>=5: return PHONE_OTP_LOCKED
         if row['expires']<time.time(): return 'OTP has expired. Tap Resend OTP to get a new code.'
-        if row['attempts']>=5: return 'Too many incorrect attempts. Tap Resend OTP to get a new code.'
         if row.get('busyUntil',0)>time.time(): return 'Verification already in progress. Please wait a moment and retry.'
         tx.update(ref,{'attempts':row['attempts']+1,'claim':claim_id,'busyUntil':time.time()+60})
         return row
@@ -159,7 +161,9 @@ async def phone_verify(body: dict,user=Depends(current_user)):
     except Exception as error:
         rejected=isinstance(error,HTTPException) and error.status_code==401
         wrong=rejected and error.detail=='Invalid or expired verification code'
-        retired=rejected and str(error.detail).startswith(('OTP has expired','Too many incorrect attempts'))
+        retired=rejected and str(error.detail).startswith(('OTP has expired','Too many incorrect attempts','No attempts left'))
+        retired_message = (PHONE_OTP_LOCKED if rejected and str(error.detail).startswith(
+            ('Too many incorrect attempts', 'No attempts left')) else str(getattr(error, 'detail', '')))
         # Always release the claim so the next try is evaluated. Provider
         # outages do not count against the user's attempts, and a code the
         # provider retired is closed so a new one can be sent at once.
@@ -168,13 +172,14 @@ async def phone_verify(body: dict,user=Depends(current_user)):
             current=ref.get(transaction=tx).to_dict() or {}
             if current.get('claim')!=claim_id: return
             change={'busyUntil':0}
-            if retired: change|={'attempts':5,'expires':0,'retiredMessage':str(error.detail)}
+            if retired: change|={'attempts':5,'expires':0,'retiredMessage':retired_message}
             elif not rejected: change['attempts']=max(current.get('attempts',1)-1,0)
             tx.update(ref,change)
         transact(release)
         if wrong:
             left=5-row['attempts']-1
-            raise HTTPException(401,f'Incorrect OTP. {left} attempt{"s" if left!=1 else ""} left.' if left>0 else 'Too many incorrect attempts. Tap Resend OTP to get a new code.') from None
+            raise HTTPException(401,f'Incorrect OTP. {left} attempt{"s" if left!=1 else ""} left.' if left>0 else PHONE_OTP_LOCKED) from None
+        if retired: raise HTTPException(401,retired_message) from None
         if isinstance(error,HTTPException): raise
         raise HTTPException(502,'SMS verification is temporarily unavailable. Please retry.') from None
     @firestore.transactional

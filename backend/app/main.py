@@ -337,14 +337,16 @@ def decide_worklog(key: str, action: str, body: dict, user=Depends(current_user)
         if user['role'] not in ('CAPTAIN','PROJECT_CONTROLLER') and not (user['role']=='TEAM_LEADER' and module and module.get('teamLeadId')==user['id']): raise HTTPException(403,'Permission denied')
         if row['approvalStatus']!='PENDING': raise HTTPException(409,'Already decided')
         changes={'approvalStatus':'APPROVED' if action=='approve' else 'REJECTED','rejectionReason':str(body.get('rejectionReason',''))[:1000],'approvedById':user['id'],'approvedByName':user['name'],'approvedAt':datetime.now(timezone.utc).isoformat()}
+        last_progress_id = 0
         if action=='approve' and module:
             total=(module.get('completedSeconds') or 0)+(row.get('billableDurationSeconds') or 0)
-            queue_progress_events(tx,module,module|{'completedSeconds':total,'completedMinutes':total//60})
+            last_progress_id = queue_progress_events(tx,module,module|{'completedSeconds':total,'completedMinutes':total//60})
             tx.update(module_ref,{'completedSeconds':total,'completedMinutes':total//60,'completedHours':total//3600})
         tx.update(ref,changes)
         if action=='reject' and ledger:
             tx.update(ledger_ref,{'totalSeconds':max(0,ledger['totalSeconds']-(row.get('billableDurationSeconds') or 0)-(row.get('nonBillableDurationSeconds') or 0))})
-        notification_id=next_id()
+        # Progress alerts can occupy several IDs within the same clock tick.
+        notification_id=max(next_id(), last_progress_id + 1)
         tx.create(db.collection('notifications').document(str(notification_id)),{'id':notification_id,'userId':row['employeeId'],'title':'Timesheet '+changes['approvalStatus'].lower(),'message':row.get('moduleName','Timesheet'),'type':'TIMESHEET_APPROVED' if action=='approve' else 'TIMESHEET_REJECTED','moduleId':row['moduleId'],'moduleName':row.get('moduleName',''),'projectId':row['projectId'],'read':False,'pushPending':True,'createdAt':datetime.now(timezone.utc).isoformat()})
         return row|changes
     # The emulator and pessimistic cloud transactions may abort during reads,

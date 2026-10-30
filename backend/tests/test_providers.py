@@ -279,9 +279,15 @@ def test_widget_rejects_missing_request_id_and_legacy_template_config(configured
     ('OTP is invalid or has expired','Invalid or expired verification code'),
     ('Invalid/expired OTP','Invalid or expired verification code'),
     ('Expired or invalid OTP','Invalid or expired verification code'),
-    ('Maximum attempts exceeded; OTP expired','Too many incorrect attempts'),
-    ('Maximum verification attempts exceeded','Too many incorrect attempts'),
-    ('Invalid OTP','Invalid or expired verification code')])
+    ('Maximum attempts exceeded; OTP expired','No attempts left'),
+    ('Maximum verification attempts exceeded','No attempts left'),
+    ('Invalid OTP','Invalid or expired verification code'),
+    ('OTP not matched or expired','Invalid or expired verification code'),
+    ('OTP mismatch or expired','Invalid or expired verification code'),
+    ('OTP does not match or has expired','Invalid or expired verification code'),
+    ('Incorrect OTP; OTP expired','Invalid or expired verification code'),
+    ('Invalid & expired OTP','Invalid or expired verification code'),
+    ('OTP not valid or expired','Invalid or expired verification code')])
 def test_widget_distinguishes_expiry_attempt_limit_and_incorrect_code(configured,monkeypatch,reason,expected):
     async def fake(*a,**kw): return httpx.Response(200,json={'type':'error','message':reason})
     monkeypatch.setattr(adapters,'provider_request',fake)

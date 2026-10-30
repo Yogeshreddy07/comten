@@ -8,6 +8,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:frontend/core/services/push_notification_service.dart';
+import 'package:frontend/core/theme/app_colors.dart';
+import 'package:frontend/shared/enums/notification_type.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -135,17 +137,25 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
+  test('project milestone colors follow 30, 60, 90 and 100 percent', () {
+    const type = NotificationType.projectMilestoneReached;
+    expect(type.alertColor(30), AppColors.statusActive);
+    expect(type.alertColor(60), AppColors.statusOnHold);
+    expect(type.alertColor(90), AppColors.statusCancelled);
+    expect(type.alertColor(100), AppColors.statusCancelled);
+  });
+
   test('project milestone percent and accent reach the native notification', () async {
     await PushNotificationService.instance.showForegroundNotification(
       const RemoteMessage(data: {'notificationId': '999', 'type': 'PROJECT_MILESTONE_REACHED',
-        'projectId': '100', 'milestonePercent': '25'},
-        notification: RemoteNotification(title: 'Project 25% completed', body: 'Synthetic project')),
+        'projectId': '100', 'milestonePercent': '60'},
+        notification: RemoteNotification(title: 'Project 60% completed', body: 'Synthetic project')),
     );
     final shown = calls.singleWhere((call) => call.method == 'show');
     final args = Map<String, dynamic>.from(shown.arguments as Map);
     final android = Map<String, dynamic>.from(args['platformSpecifics'] as Map);
-    expect(android['colorRed'], isNotNull);
-    expect(jsonDecode(args['payload'] as String)['milestonePercent'], '25');
+    expect(android['colorRed'], (AppColors.statusOnHold.toARGB32() >> 16) & 0xff);
+    expect(jsonDecode(args['payload'] as String)['milestonePercent'], '60');
   });
 
 }

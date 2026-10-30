@@ -68,41 +68,51 @@ class AttemptsRepository extends ResumeRepository {
     if (otp == '123456') return ApiResult(success: true, message: 'Account activated');
     final left = 3 - phoneAttempts;
     return ApiResult(success: false,
-      message: 'Incorrect OTP. $left attempt${left == 1 ? '' : 's'} left.');
+      message: left > 0 ? 'Incorrect OTP. $left attempt${left == 1 ? '' : 's'} left.'
+          : 'No attempts left. Please try again after some time.');
   }
 }
 
 void main(){
-  testWidgets('phone shows two then one attempts left and accepts the correct code', (tester) async {
-    tester.view.physicalSize = const Size(480, 1100);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    final repository = AttemptsRepository();
-    final model = EmailViewModel(repository);
-    await model.sendActivationOtp('EMP009');
-    await tester.pumpWidget(MultiProvider(providers: [
-      ChangeNotifierProvider<AuthViewModel>.value(value: model),
-      ChangeNotifierProvider(create: (_) => ThemeViewModel()),
-    ], child: const MaterialApp(home: ActivationPhoneScreen())));
-    await tester.tap(find.text('Send Phone OTP'));
-    await tester.pumpAndSettle();
-    for (final left in [2, 1]) {
-      await tester.enterText(find.widgetWithText(TextFormField, 'Phone OTP'), '000000');
+  for (final complete in [true, false]) {
+    testWidgets('phone shows two then one attempts left, then ${complete ? 'accepts correct code' : 'shows no attempts left'}', (tester) async {
+      tester.view.physicalSize = const Size(480, 1100);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final repository = AttemptsRepository();
+      final model = EmailViewModel(repository);
+      await model.sendActivationOtp('EMP009');
+      await tester.pumpWidget(MultiProvider(providers: [
+        ChangeNotifierProvider<AuthViewModel>.value(value: model),
+        ChangeNotifierProvider(create: (_) => ThemeViewModel()),
+      ], child: const MaterialApp(home: ActivationPhoneScreen())));
+      await tester.tap(find.text('Send Phone OTP'));
+      await tester.pumpAndSettle();
+      for (final left in [2, 1]) {
+        await tester.enterText(find.widgetWithText(TextFormField, 'Phone OTP'), '000000');
+        await tester.tap(find.text('Verify Phone OTP'));
+        await tester.pumpAndSettle();
+        expect(find.text('Incorrect OTP. $left attempt${left == 1 ? '' : 's'} left.'), findsOneWidget);
+        expect(find.textContaining('OTP has expired'), findsNothing);
+        expect(find.textContaining('Resend OTP in'), findsOneWidget);
+      }
+      await tester.enterText(find.widgetWithText(TextFormField, 'Phone OTP'), complete ? '123456' : '000000');
       await tester.tap(find.text('Verify Phone OTP'));
       await tester.pumpAndSettle();
-      expect(find.text('Incorrect OTP. $left attempt${left == 1 ? '' : 's'} left.'), findsOneWidget);
-      expect(find.textContaining('OTP has expired'), findsNothing);
-      expect(find.textContaining('Resend OTP in'), findsOneWidget);
-    }
-    await tester.enterText(find.widgetWithText(TextFormField, 'Phone OTP'), '123456');
-    await tester.tap(find.text('Verify Phone OTP'));
-    await tester.pumpAndSettle();
-    expect(find.text('Account activated'), findsOneWidget);
-    expect(repository.phoneAttempts, 3);
-    await tester.pumpWidget(const SizedBox());
-    model.dispose();
-  });
+      if (complete) {
+        expect(find.text('Account activated'), findsOneWidget);
+      } else {
+        expect(find.text('No attempts left. Please try again after some time.'), findsOneWidget);
+        expect(find.textContaining('OTP has expired'), findsNothing);
+        final resend = tester.widget<TextButton>(find.widgetWithText(TextButton, 'Resend Phone OTP'));
+        expect(resend.onPressed, isNotNull);
+      }
+      expect(repository.phoneAttempts, 3);
+      await tester.pumpWidget(const SizedBox());
+      model.dispose();
+    });
+  }
   testWidgets('retired OTP permits resend and server cooldown disables further sends',(tester) async {
     tester.view.physicalSize=const Size(480,1100);tester.view.devicePixelRatio=1;
     addTearDown(tester.view.resetPhysicalSize);addTearDown(tester.view.resetDevicePixelRatio);
