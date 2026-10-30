@@ -18,7 +18,7 @@ reverted; the existing notification registration/delivery fixes are retained.
 | 9 | Remove Attachment from Settings | Removed the My attachments entry from Settings. Existing attachments on business-record screens are retained. |
 | 10 | Completed module in Reason for Delay | Picker excludes displayed-completed, paid and inactive modules. Backend rejects delay requests against completed/inactive modules or parents. |
 | 11 | Billing Completed module in TL Status Update | Paid modules are filtered from the transport and ViewModel picker. Stale selections are rejected. Work completed but not yet paid can still be submitted for billing. |
-| 12 | Cannot deactivate project; pending Captain approval error | Billing projects still require Captain approval. Repeated Deactivate returns an informational pending result and creates no duplicate request. A new request atomically queues a Captain alert; its in-app tap opens Approvals, and the queue refreshes on entry. Approval still cascades deactivation to child modules. |
+| 12 | Cannot deactivate project; pending Captain approval error | Updated 30 October: Captains and Project Controllers deactivate projects directly, including Billing projects, without approval. Deactivation still cascades to modules. Activation remains direct; modules are reactivated individually. Legacy approval actions are retired and no longer shown in the decision queue. |
 | 13 | Inactive billing project should move to Completed | Inactive module/parent rows group under Completed and display Inactive, with editing disabled. Stored payment status is preserved; deactivation does not assert full payment. |
 | 14 | Change PIN keyboard cannot reopen | Tapping the PIN dots explicitly requests the system keyboard even when Android Back hid it while the field retained focus. PIN obscuring and semantics remain intact. |
 
@@ -97,3 +97,214 @@ the normal app from 1.0.8/code 10 to 1.0.9/code 11. UID 11177 and original
 first-install date are checked before/after; the app was not uninstalled or
 cleared. Device acceptance and hosted rollout results are recorded separately
 under `.local/tester-bugs/` as they complete.
+
+
+## Employee review loading follow-up ? 30 October 2026
+
+Next validates contact details once before opening review. Review no longer
+repeats that request on entry, on Confirm, or before saving. Confirm is ready
+when review opens and opens the existing confirmation dialog immediately; it
+never displays a loading spinner. Saving starts directly after dialog Save,
+with separate progress feedback and duplicate-tap protection. Backend atomic
+identity checks remain authoritative if another account claims the contacts
+between Next and Save. Failed saves still refresh field errors and support
+validation retry; returning to Edit preserves the form and Next validates again.
+
+The read-only identity-validation response no longer clears and rewrites the
+account data cache before Next can navigate. This removes local cache work and
+three redundant validation round trips from the successful flow; actual save
+completion still depends on backend provisioning and network response time.
+
+Validation: all 10 focused Flutter tests passed across employee validation flow,
+employee identity, and request reads. No backend changes, deployment, APK build,
+or phone installation were performed for this follow-up.
+
+
+## Direct project activation/deactivation - 30 October 2026
+
+Per the updated requirement, project deactivation never creates a Captain
+approval request, including when a Project Controller deactivates a project
+with Billing modules. Activation already required no approval and retains that
+behavior. Existing manager-only permissions remain in force. Deactivation still
+marks the project and all modules inactive and reconciles assignment access;
+billing/payment values are preserved. Project activation does not automatically
+activate its modules, matching the existing lifecycle.
+
+Old pending requests cannot block direct deactivation. The retired request
+creation and decision endpoints return 410 with guidance to use Projects, so an
+old approval cannot deactivate a project again after reactivation. The mobile
+approval queue no longer fetches deactivation requests, and the project dialog
+no longer states that Captain approval is required. Other approval flows retain
+their existing behavior.
+
+Validation: 23 backend lifecycle tests passed against local Auth/Firestore
+emulators; nine focused Flutter lifecycle/approval tests passed. Changed Dart
+files pass analysis, and git diff --check passes. No hosted deployment, APK
+build, phone installation, or live project changes were performed.
+
+
+## Phone OTP attempt-count follow-up - 30 October 2026
+
+Found and fixed an overbroad provider error classification: any message
+containing `expire` was treated as definite expiry. An ambiguous rejection such
+as `Invalid or expired OTP` therefore retired the challenge, set its expiry to
+zero, and replaced the remaining-attempt count with an expiry message.
+Ambiguous invalid/expired responses now follow the incorrect-code counter;
+explicit expiry still retires the code. Attempt-limit responses take precedence
+when they also mention expiry, preserving the correct lockout reason.
+
+Regression coverage exercises the real provider adapter together with the
+Firestore challenge counter: incorrect entries report 4, 3, 2, then 1 attempt
+left without changing the original deadline. A correct code then succeeds;
+a fifth incorrect entry locks the challenge and cannot be bypassed by submitting
+a correct code. A mobile regression checks the visible 2-to-1 sequence and
+successful verification afterwards. No attempt limits, expiry durations,
+recipient binding, proof validation, or resend protections were relaxed.
+
+Validation: 74 provider/activation tests and three focused phone workflow tests
+passed against local emulators with mocked external provider responses; all
+four Flutter activation-flow tests passed and changed-test Dart analysis is
+clean. The exact live provider response behind the supplied screenshots was
+not captured, so this verifies the reproduced classification bug, not a live
+SMS reproduction. No live OTP was sent, and no deployment or phone update was
+performed. Provider integration reference: https://docs.msg91.com/otp-widget.
+
+
+## First project load and login code casing - 30 October 2026
+
+The supplied project-load screenshot shows the direct transport's `Firebase is
+unavailable` message. The existing HTTP GET retry never handled these direct
+Firebase reads, so a temporary connection failure immediately produced the
+Retry screen, particularly noticeable with no project snapshot on a fresh
+installation. Direct GET operations now retry transient unavailable,
+deadline-exceeded, and timeout failures up to three times with short backoff.
+Each attempt creates a fresh document-read scope so a previously failed Future
+cannot be reused. Persistent failures still surface after the bounded retries;
+permission/authentication errors are not retried and writes are never replayed.
+The exact phone/network condition on the original installation has not been
+reproduced; the missing recovery path is verified with simulated failures.
+
+The login Employee Code field now converts typed/pasted lowercase and mixed-case
+codes to uppercase and submits a trimmed uppercase code. Cursor position is
+preserved for employee codes. Existing Firebase/backend case-insensitive login
+is retained; password characters are unchanged.
+
+Validation: 20 focused Flutter tests passed, covering recovery after three
+transient failures, retry exhaustion, immediate permission/auth errors, code
+formatting/login submission, and existing project lifecycle/read behavior.
+No APK build, phone installation, or deployment was performed.
+
+
+### Login casing requirement correction - 30 October 2026
+
+The updated requirement supersedes the earlier case-insensitive login note:
+employee-code login now requires uppercase codes in both the mobile transport
+and backend endpoint. The form automatically uppercases typed/pasted codes,
+so normal input submits the canonical uppercase code. Lowercase/mixed-case
+codes passed directly to authentication are rejected before password
+verification. Passwords remain case-sensitive and are never uppercased.
+Firebase's internal account email alias remains lowercase as required by the
+existing account scheme; this does not change the accepted employee-code case.
+
+Five focused backend tests pass with mocked authentication; no live account
+writes, deployment, or phone update was performed.
+
+
+## Project milestone and Android tray follow-up - 30 October 2026
+
+The user clarified that the missing alerts are app notifications, not SMS OTPs,
+and that progress must use the combined estimate of the whole project. The
+new thresholds are 25%, 50%, 75%, and 100% of approved billable seconds divided
+by the combined estimated hours of active, non-deleted modules. For example,
+one approved hour against a three-hour project crosses 25% only. Pending or
+rejected hours do not advance approved progress.
+
+Crossings queue project milestone notifications for active Captains, Project
+Controllers, and assigned staff/team leaders across the project's modules.
+Project-level markers and the approval transaction prevent duplicate crossings
+from repeated saves, simultaneous approvals, or later increases in estimates.
+A large approval queues every threshold it crosses. Existing module completion
+alerts remain intact. Project milestone cards/pushes carry their percentage and
+open Project Details.
+
+The connected OPPO has notification permission granted, its Comten channel at
+high importance with banners enabled, and Do Not Disturb off. Current FCM token
+validation succeeds. Three labelled phone-only alerts were actually observed
+in Android's notification records: foreground (859 ms), background (422 ms),
+and stopped app process (937 ms). No hosted notification or business records
+were written by those probes. These are individual observations, not latency
+guarantees. The 08:34 record is no longer pending but has no device-delivery
+receipt, so its historical absence cannot be attributed with certainty.
+
+Two delivery improvements are implemented: failed registration retries while
+the app stays open (5/15/30/60-second backoff, cancelled on logout), and outbox
+attempt records capture FCM acceptance/device fingerprints and sanitized
+failure categories. Acceptance remains distinct from actual phone receipt.
+A partial device failure no longer resends to devices that already accepted
+the same alert. Existing notification permission/recipient controls and stale
+backlog handling are preserved.
+
+Validation: 84 related backend tests passed, followed by the final seven
+milestone tests including two additional edge cases. All 33 focused Flutter
+regressions passed and changed-file analysis is clean. New backend behavior
+has not been deployed. The physical verification and candidate build details
+below complete this follow-up.
+
+
+### Installed candidate and physical milestone verification
+
+Signed candidate **1.0.11 / versionCode 14** is installed on the connected
+OPPO CPH2401 using `adb install -r`. UID 11177 and the original installation
+date (26 October 2026, 17:42:45) are preserved. No uninstall, app-data clear,
+password change, or PIN reset was performed. This APK contains the current
+local source fixes from this thread; backend changes remain undeployed.
+
+Four project milestone payloads were generated by approving synthetic work
+through the actual local-emulator endpoints against a three-hour project
+spread across two modules. They were forwarded through the current push
+composition to only the fingerprint-matched connected phone. All four native
+tray entries were observed: 25% (813 ms), 50% (781 ms), 75% (422 ms), and 100%
+(375 ms). Synthetic project IDs were omitted from the phone-only payloads so
+that tapping a test alert safely falls back to Notifications; no synthetic
+project exists in the hosted database. No hosted notification/business records
+were created or historical notifications requeued. Labelled test alerts are
+left for the user to dismiss.
+
+APK: `.local/notification-debug/Crompton-PMS-1.0.11-progress-fixes.apk`,
+64,018,147 bytes, SHA-256
+`d81a9ba6d26c2f2b202a17b4877f5273e7ea5df44419b35d85462dd4cec40783`.
+Signature verification passes and matches the installed signing certificate.
+The bounded configured-private-value/package scan passed. Build with:
+
+```powershell
+flutter build apk --release --dart-define-from-file=../firebase/development.mobile.json --build-name=1.0.11 --build-number=14
+```
+
+The current Flutter SDK requires generated release plugin registration to be
+refreshed after test tooling; the successful build includes the dependency/tooling
+refresh instead of `--no-pub`. Existing Gradle/AGP/Kotlin future-support warnings
+remain. Private build/probe reports are under `.local/notification-debug/`.
+Live project milestone generation still requires deploying the backend source;
+phone-only FCM tests do not establish that hosted trigger is deployed.
+
+
+On the updated code-14 APK, background and stopped-process probes also produced
+native tray entries (1,031 ms and 875 ms respectively). Future in-place updates
+must retain code 14 or use a higher version code; build flags above override
+the checked-in pubspec version for this candidate.
+
+
+### User-requested live phone retest - 30 October 2026
+
+The connected phone was already past its lock screen at the New Notifications
+gate. Continue was used without marking notifications read; no password or
+PIN was entered or changed by automation. Fresh phone-only FCM probes again
+produced native notification records in foreground (359 ms), background
+(1,016 ms), and with the app process stopped (875 ms). A screenshot also shows
+the native Comten test banner above the app. All four labelled project
+milestone payloads were rechecked on the same physical phone: 25% (844 ms),
+50% (828 ms), 75% (359 ms), and 100% (797 ms). The first milestone probe stopped
+because the app was no longer foreground; rerunning after reopening the app
+passed. No hosted business or notification records were modified. This repeats
+physical FCM delivery verification; it does not deploy or prove hosted project
+milestone generation, whose backend source still awaits deployment.

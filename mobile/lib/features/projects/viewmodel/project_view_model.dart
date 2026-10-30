@@ -197,7 +197,6 @@ class ProjectViewModel extends PerformanceNotifier {
   }
 
   /// Apply the confirmed server state without waiting for a full list reload.
-  /// A billing approval request leaves the project active.
   Future<ApiResult> deactivateProject(int id) async {
     _isDeactivating = true;
     notifyListeners();

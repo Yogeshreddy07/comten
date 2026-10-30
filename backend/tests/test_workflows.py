@@ -327,3 +327,58 @@ def test_delay_request_blocks_resubmission_until_decided(tokens):
     assert submit().status_code==200
     decided=[n for n in db.collection('notifications').where('delayRequestId','in',[rid,rid2]).stream() if n.to_dict()['type'] in ('DELAY_APPROVED','DELAY_REJECTED')]
     assert sorted(n.to_dict()['type'] for n in decided)==['DELAY_APPROVED','DELAY_REJECTED']
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_widget_generic_rejection_counts_down_without_premature_expiry(monkeypatch, complete):
+    """Exercise the real provider adapter and challenge counter together."""
+    import asyncio
+    import httpx
+    from fastapi import HTTPException
+    from app import recovery, messaging
+    uid = time.time_ns() // 1000
+    person = {'id': uid, 'phone': '9000000089', 'active': True, '_activationSession': True}
+    employee = db.collection('employees').document(str(uid))
+    ref = db.collection('phone-challenges').document(str(uid))
+    for key, value in {'environment': 'development', 'allow_real_messages': True,
+                       'msg91_dispatch_enabled': True, 'msg91_auth_key': 'synthetic',
+                       'msg91_widget_id': 'synthetic-widget',
+                       'approved_sms_recipients': '919000000089'}.items():
+        monkeypatch.setattr(recovery.settings, key, value)
+    calls = []
+    async def provider(method, url, **kwargs):
+        calls.append(url)
+        if url.endswith('verifyAccessToken'):
+            return httpx.Response(200, json={'type': 'success', 'message': '919000000089'})
+        if kwargs['json']['otp'] == '123456':
+            return httpx.Response(200, json={'type': 'success', 'message': 'synthetic-access-token'})
+        return httpx.Response(200, json={'type': 'error', 'message': 'Invalid or expired OTP'})
+    monkeypatch.setattr(messaging, 'provider_request', provider)
+    employee.set(person | {'phoneVerified': False})
+    deadline = time.time() + 600
+    ref.set({'challengeId': 'synthetic', 'phone': '919000000089', 'sent': time.time(),
+             'expires': deadline, 'attempts': 0, 'state': 'SENT',
+             'widgetId': 'synthetic-widget', 'providerRequestId': 'synthetic-request'})
+    try:
+        for left in (4, 3, 2, 1):
+            with pytest.raises(HTTPException) as failure:
+                asyncio.run(recovery.phone_verify({'otp': '000000'}, user=person))
+            assert failure.value.detail == f'Incorrect OTP. {left} attempt{"s" if left != 1 else ""} left.'
+            state = ref.get().to_dict()
+            assert state['attempts'] == 5 - left
+            assert state['expires'] == deadline and state['busyUntil'] == 0
+            assert not state.get('retiredMessage')
+        if complete:
+            result = asyncio.run(recovery.phone_verify({'otp': '123456'}, user=person))
+            assert result['success'] and get('employees', uid)['phoneVerified'] is True
+            assert ref.get().to_dict()['state'] == 'CONSUMED'
+        else:
+            with pytest.raises(HTTPException, match='Too many incorrect attempts'):
+                asyncio.run(recovery.phone_verify({'otp': '000000'}, user=person))
+            with pytest.raises(HTTPException, match='Too many incorrect attempts'):
+                asyncio.run(recovery.phone_verify({'otp': '123456'}, user=person))
+            assert len(calls) == 5
+            assert get('employees', uid)['phoneVerified'] is False
+    finally:
+        ref.delete()
+        employee.delete()

@@ -237,9 +237,8 @@ class NotificationNavigator {
       // remaining-hours alert is module-specific, but the frontend
       // notification model doesn't carry a moduleId for it, so it routes to
       // the same project-level screen as the closest available fallback.
-      // `projectMilestoneReached` is no longer generated (see
-      // `MilestoneNotificationScheduler`) but stays routable here for any
-      // historical rows.
+      // Project milestones use combined approved hours across modules and
+      // open the project summary that owns that progress.
       case NotificationType.projectCreated:
       case NotificationType.projectUpdated:
       case NotificationType.projectDeadlineExtended:

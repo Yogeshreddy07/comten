@@ -4,6 +4,7 @@ import re
 import secrets
 import logging
 import threading
+import hashlib
 import httpx
 from firebase_admin import firestore, messaging
 from fastapi import HTTPException
@@ -187,12 +188,17 @@ async def verify_msg91(phone: str, otp: str, request_id: str):
     if not provider_success(result):
         try: reason=str(result.json().get('message','')).lower()
         except (ValueError,AttributeError): reason=''
-        # The widget retires a request after expiry or its own retry cap; a
-        # correct code cannot succeed then, so ask for a fresh one.
-        if 'expire' in reason:
-            raise HTTPException(401,'OTP has expired. Tap Resend OTP to get a new code.')
+        # A retry cap can mention expiry too; preserve the actual lockout reason.
         if any(marker in reason for marker in ('limit','max','exceed')):
             raise HTTPException(401,'Too many incorrect attempts. Tap Resend OTP to get a new code.')
+        # "Invalid OR expired" does not establish expiry. Treat that generic
+        # rejection as an incorrect code and let the challenge's deadline and
+        # attempt counter decide whether another try is allowed.
+        ambiguous = re.search(
+            r'\b(?:invalid|incorrect|wrong)\b.*(?:\bor\b|/).*\bexpired\b|'
+            r'\bexpired\b.*(?:\bor\b|/).*\b(?:invalid|incorrect|wrong)\b', reason)
+        if 'expire' in reason and not ambiguous:
+            raise HTTPException(401,'OTP has expired. Tap Resend OTP to get a new code.')
         raise HTTPException(401,'Invalid or expired verification code')
     access_token=result.json().get('message')
     if not isinstance(access_token,str) or not 16<=len(access_token)<=8192:
@@ -259,33 +265,48 @@ def _claim_push(ref):
         claimed=item.get('pushClaimedAt')
         now=datetime.now(timezone.utc)
         if isinstance(claimed,datetime) and now-claimed<PUSH_CLAIM_TTL: return None
-        tx.update(ref,{'pushClaimedAt':now})
+        tx.update(ref,{'pushClaimedAt':now,'pushLastAttemptAt':now,
+                       'pushAttemptCount':item.get('pushAttemptCount',0)+1})
         return item
     return claim(db.transaction())
 
 
-def _send_push(item):
-    """Keep pending until at least one registered device accepts the push.
+def _send_push(item, outcome=None):
+    """Track FCM acceptance per token, retaining failures for the worker.
 
-    An empty token list is not a successful delivery: registration may still
-    be recovering on the phone. The existing age limit bounds these retries.
+    Acceptance is not a device delivery receipt. Never replay a successful
+    device send just because a different registered device failed.
     """
-    failed=False
-    delivered=False
+    failed = False
+    accepted = set(item.get('pushAcceptedTokenHashes', []))
+    delivered = False
+    errors = set()
     payload={k:str(item[k]) for k in ('type','projectId','moduleId','milestonePercent') if item.get(k) is not None}
     payload['notificationId']=str(item['id'])
     android=messaging.AndroidConfig(priority='high',notification=messaging.AndroidNotification(
         channel_id='comten_notifications', tag=str(item['id']), sticky=True))
     for token in all_rows('device-tokens',[('userId',item['userId'])]):
+        fingerprint = hashlib.sha256(token['token'].encode()).hexdigest()
+        if fingerprint in accepted:
+            delivered = True
+            continue
         try:
             messaging.send(messaging.Message(token=token['token'],notification=messaging.Notification(title=item['title'],body=item['message']),data=payload,android=android))
-            delivered=True
+            delivered = True
+            accepted.add(fingerprint)
         except messaging.UnregisteredError:
-            # Delete only this registered document; never another account's token.
             db.collection('device-tokens').document(str(token['id'])).delete()
+            errors.add('unregistered-device')
         except Exception:
-            failed=True
+            failed = True
+            errors.add('provider-send-failed')
             logging.getLogger('crompton').warning('Push delivery failed; will retry')
+    if not delivered and not errors:
+        errors.add('no-registered-device')
+    if outcome is not None:
+        outcome.update(pushAcceptedTokenHashes=sorted(accepted),
+                       pushAcceptedDeviceCount=len(accepted),
+                       pushLastErrors=sorted(errors))
     return failed or not delivered
 
 
@@ -302,8 +323,11 @@ def deliver_push(key):
         if not push_recipient_allowed(item['userId']):
             ref.update({'pushPending':False,'pushClaimedAt':firestore.DELETE_FIELD,'pushSkipped':'not-approved'})
             return
-        failed=_send_push(item)
-        ref.update({'pushPending':failed,'pushClaimedAt':firestore.DELETE_FIELD})
+        outcome = {}
+        failed=_send_push(item, outcome)
+        if outcome['pushAcceptedDeviceCount']:
+            outcome['pushAcceptedAt'] = datetime.now(timezone.utc)
+        ref.update({'pushPending':failed,'pushClaimedAt':firestore.DELETE_FIELD,**outcome})
     except Exception:
         logging.getLogger('crompton').warning('Push dispatch error; will retry')
 

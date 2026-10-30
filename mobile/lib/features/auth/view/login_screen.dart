@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../../core/utils/navigation_guard.dart';
+import '../../../core/utils/uppercase_text_input_formatter.dart';
 import '../../../core/utils/snackbar_util.dart';
 import '../../dashboard/utils/role_dashboard_navigator.dart';
 import '../viewmodel/auth_viewmodel.dart';
@@ -44,7 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    final employeeCode = _employeeCodeController.text.trim();
+    final employeeCode = _employeeCodeController.text.trim().toUpperCase();
     final result = await viewModel.login(
       employeeCode: employeeCode,
       password: _passwordController.text,
@@ -126,6 +127,7 @@ class _LoginScreenState extends State<LoginScreen> {
             AuthTextField(
               controller: _employeeCodeController,
               label: "Employee Code",
+              inputFormatters: const [UppercaseTextInputFormatter()],
               icon: Icons.badge_outlined,
               validator: (value) {
                 if (value == null || value.trim().isEmpty) {

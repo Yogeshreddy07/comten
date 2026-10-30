@@ -1,3 +1,6 @@
+import 'package:frontend/features/approvals/repository/approval_repository.dart';
+import 'package:frontend/features/approvals/viewmodel/approval_view_model.dart';
+import 'package:frontend/features/approvals/model/project_change_request.dart';
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frontend/features/auth/model/api_result.dart';
@@ -89,8 +92,29 @@ class Activities extends ActivityRepository {
   ]);
 }
 
+class Approvals extends ApprovalRepository {
+  int changesRead = 0;
+  @override
+  Future<ApiResult> getChangeRequests() async {
+    changesRead++;
+    return ApiResult(success: true, message: '', data: <ProjectChangeRequest>[]);
+  }
+  @override
+  Future<ApiResult> getDeactivationRequests() async =>
+      throw StateError('Project status changes no longer require approval');
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('approvals load module changes without legacy deactivation requests', () async {
+    final repository = Approvals();
+    final model = ApprovalViewModel(repository: repository);
+    await model.fetchChangeRequests();
+    expect(repository.changesRead, 1);
+    expect(model.loadState, ApprovalLoadState.success);
+    expect(model.deactivationRequests, isEmpty);
+    model.dispose();
+  });
   test('failed display read after acknowledged creation still succeeds', () async {
     final model = CreateProjectViewModel(projectRepository: LegacyCreation(), moduleRepository: UnavailableModules())
       ..setNumberOfFloorsText('2')..setAreaText('500');
@@ -136,7 +160,7 @@ void main() {
     expect(model.projects.singleWhere((p) => p.id == 1).status, 'NOT_STARTED');
     model.dispose();
   });
-  test('pending billing approval leaves project active', () async {
+  test('unconfirmed server state does not mark the project inactive', () async {
     final repository = Projects()..pending = true;
     final model = ProjectViewModel(repository: repository);
     await model.fetchProjects();

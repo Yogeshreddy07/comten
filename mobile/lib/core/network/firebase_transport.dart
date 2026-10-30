@@ -1,5 +1,6 @@
 import '../services/performance_trace.dart';
 import 'request_reads.dart';
+import 'firebase_read_retry.dart';
 import 'package:crypto/crypto.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -33,6 +34,8 @@ class FirebaseTransport {
       cursor=snapshot.docs.last;
     }
   }
+  static bool isUppercaseLoginIdentifier(String identifier) =>
+      identifier.contains('@') || identifier == identifier.toUpperCase();
   static String email(String identifier) => identifier.contains('@') ? identifier.trim().toLowerCase() : '${identifier.trim().toLowerCase()}@accounts.crompton.invalid';
   dynamic serial(dynamic value) {
     if(value is Timestamp) return value.toDate().toIso8601String();
@@ -61,10 +64,21 @@ class FirebaseTransport {
     await AccountCache.instance.put('auth_profile',data);
     return data;
   }
-  Future<http.Response?> request(String method,String endpoint,Map<String,dynamic> body) =>
-      runZoned(() => _request(method, endpoint, body), zoneValues: {
+  Future<http.Response?> request(String method,String endpoint,Map<String,dynamic> body) async {
+    // Recreate the read scope for each attempt: a failed Future cached in the
+    // previous scope must not turn a retry into the same immediate failure.
+    Future<http.Response?> once() => runZoned(
+      () => _request(method, endpoint, body), zoneValues: {
         _readsKey: RequestReads<DocumentSnapshot<Map<String,dynamic>>>((path) => db.doc(path).get()),
       });
+    try {
+      return method == 'GET' ? await retryFirebaseRead(once) : await once();
+    } on TimeoutException {
+      return response(null,status:503,message:'Firebase connection timed out');
+    } on FirebaseException catch(e) {
+      return response(null,status:e.code=='permission-denied'?403:503,message:e.code=='permission-denied'?'Permission denied':'Firebase is unavailable');
+    }
+  }
 
   // These routes always use backend authorization. Do not perform a second,
   // redundant mobile profile read before dispatching them.
@@ -92,6 +106,9 @@ class FirebaseTransport {
     final collection=parts.first;
     try {
       if(endpoint=='/auth/login') {
+        if (!isUppercaseLoginIdentifier((body['employeeCode'] as String).trim())) {
+          return response(null,status:401,message:'Employee code must be uppercase.');
+        }
         await AccountCache.instance.clear(accountUid:auth.currentUser?.uid);
         await auth.signOut();
         var identifier=body['employeeCode'] as String;
@@ -253,8 +270,14 @@ class FirebaseTransport {
       }
       await AccountCache.instance.put(endpoint,serial(result),revision:cacheRevision);return response(result);
     } on FirebaseAuthException catch(e) { return response(null,status:e.code=='too-many-requests'?429:401,message:authErrorMessage(e.code)); }
-      on TimeoutException { return response(null,status:503,message:'Firebase connection timed out'); }
-      on FirebaseException catch(e) { return response(null,status:e.code=='permission-denied'?403:503,message:e.code=='permission-denied'?'Permission denied':'Firebase is unavailable'); }
+      on TimeoutException {
+        if (method == 'GET') rethrow;
+        return response(null,status:503,message:'Firebase connection timed out');
+      }
+      on FirebaseException catch(e) {
+        if (method == 'GET' && isTransientFirebaseReadError(e)) rethrow;
+        return response(null,status:e.code=='permission-denied'?403:503,message:e.code=='permission-denied'?'Permission denied':'Firebase is unavailable');
+      }
       on StateError catch(e) { return response(null,status:409,message:e.message); }
   }
   static String authErrorMessage(String code) => switch(code) {

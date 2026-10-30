@@ -39,31 +39,22 @@ class ApprovalViewModel extends PerformanceNotifier {
     notifyListeners();
   }
 
-  /// Loads both request kinds this ViewModel owns (module changes and
-  /// project deactivations) in one pass so the queue renders atomically.
+  /// Project status changes are direct manager actions. Legacy deactivation
+  /// requests no longer belong in the decision queue.
   Future<void> fetchChangeRequests() async {
     _loadState = ApprovalLoadState.loading;
     _errorMessage = null;
+    _deactivationRequests = [];
     notifyListeners();
 
-    final results = await Future.wait([
-      _repository.getChangeRequests(),
-      _repository.getDeactivationRequests(),
-    ]);
-    final changeResult = results[0];
-    final deactivationResult = results[1];
-
-    if (changeResult.success && deactivationResult.success) {
-      _requests = (changeResult.data as List<ProjectChangeRequest>?) ?? [];
-      _deactivationRequests =
-          (deactivationResult.data as List<ProjectDeactivationRequest>?) ?? [];
+    final result = await _repository.getChangeRequests();
+    if (result.success) {
+      _requests = (result.data as List<ProjectChangeRequest>?) ?? [];
       _loadState = ApprovalLoadState.success;
     } else {
-      _errorMessage =
-          changeResult.success ? deactivationResult.message : changeResult.message;
+      _errorMessage = result.message;
       _loadState = ApprovalLoadState.error;
     }
-
     notifyListeners();
   }
 

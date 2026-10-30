@@ -146,17 +146,39 @@ def test_lifecycle_preserves_other_project_permissions_and_cascades(graph):
     assert get('employees', employee)['permissionVersion'] > 1
 
 
-def test_billing_deactivation_keeps_project_active_pending_approval(graph):
+@pytest.mark.parametrize('role', ['CAPTAIN', 'PROJECT_CONTROLLER'])
+@pytest.mark.parametrize('stage', ['WIP', 'BILLING'])
+def test_managers_change_project_status_directly_without_approval(graph, role, stage):
     client = graph[0]
     pid, mid = create(graph)
-    db.collection('modules').document(str(mid)).update({'workStage': 'BILLING'})
-    app.dependency_overrides[current_user] = lambda: {'id': 2, 'name': 'Controller', 'role': 'PROJECT_CONTROLLER'}
-    response = client.delete(f'/api/projects/{pid}')
-    assert response.status_code == 200
-    assert response.json()['data']['active'] is True
+    db.collection('modules').document(str(mid)).update({
+        'workStage': stage, 'billingStatus': 'PART_PAYMENT_RECEIVED'})
+    app.dependency_overrides[current_user] = lambda: {'id': 2, 'name': 'Manager', 'role': role}
+    for _ in range(2):
+        response = client.delete(f'/api/projects/{pid}')
+        assert response.status_code == 200, response.text
+        assert response.json()['data']['active'] is False
+        assert 'deactivationPending' not in response.json()['data']
+    assert get('modules', mid)['active'] is False
+    assert get('modules', mid)['billingStatus'] == 'PART_PAYMENT_RECEIVED'
+    assert get('projects', pid)['memberIds'] == []
+    assert not list(db.collection('project-deactivation-requests').where(filter=FieldFilter('projectId', '==', pid)).stream())
+    assert not list(db.collection('notifications').where(filter=FieldFilter('projectId', '==', pid)).stream())
+    assert client.put(f'/api/projects/{pid}/activate', json={}).status_code == 200
+    assert get('projects', pid)['active'] is True
+    # Preserve existing activation behavior: modules are activated individually.
+    assert get('modules', mid)['active'] is False
+
+
+@pytest.mark.parametrize('role', ['TEAM_LEADER', 'EMPLOYEE'])
+def test_project_status_changes_still_require_manager_permissions(graph, role):
+    client = graph[0]
+    pid, mid = create(graph)
+    app.dependency_overrides[current_user] = lambda: {'id': 2, 'role': role}
+    assert client.delete(f'/api/projects/{pid}').status_code == 403
+    assert client.put(f'/api/projects/{pid}/activate', json={}).status_code == 403
+    assert get('projects', pid)['active'] is True
     assert get('modules', mid)['active'] is True
-    for snap in db.collection('project-deactivation-requests').where(filter=FieldFilter('projectId', '==', pid)).stream():
-        graph[-1].append(snap.reference)
 
 
 @pytest.mark.parametrize('stage', ['WIP', 'BILLING'])
@@ -231,23 +253,26 @@ def test_inactive_billing_moves_to_completed_without_inventing_payment(graph):
     assert get('modules',mid)['billingStatus']=='PART_PAYMENT_RECEIVED'
 
 
-def test_repeated_deactivation_returns_pending_and_captain_can_decide(graph):
-    client=graph[0]
-    pid,mid=create(graph)
-    db.collection('modules').document(str(mid)).update({'workStage':'BILLING'})
-    app.dependency_overrides[current_user]=lambda:{'id':2,'name':'Controller','role':'PROJECT_CONTROLLER'}
-    first=client.delete(f'/api/projects/{pid}')
-    again=client.delete(f'/api/projects/{pid}')
-    assert first.status_code==again.status_code==200
-    assert again.json()['data']['deactivationPending'] is True
-    assert 'already awaiting' in again.json()['message']
-    requests=list(db.collection('project-deactivation-requests').where(filter=FieldFilter('projectId','==',pid)).stream())
-    assert len(requests)==1 and get('projects',pid)['active']
-    graph[-1].append(requests[0].reference)
-    app.dependency_overrides[current_user]=lambda:{'id':1,'name':'Captain','role':'CAPTAIN'}
-    result=client.put(f'/api/project-deactivation-requests/{requests[0].id}/approve',json={})
-    assert result.status_code==200,result.text
-    assert get('projects',pid)['active'] is False and get('modules',mid)['active'] is False
+def test_legacy_pending_deactivation_does_not_block_or_override_status_changes(graph):
+    client, put, *_ = graph
+    pid, mid = create(graph)
+    db.collection('modules').document(str(mid)).update({'workStage': 'BILLING'})
+    request_id = mid + 200
+    put('project-deactivation-requests', request_id, {
+        'projectId': pid, 'requestedById': 2, 'approvalStatus': 'PENDING', 'status': 'PENDING'})
+    lock = db.collection('pending-approvals').document(f'project-deactivation-requests-{pid}')
+    lock.set({'requestId': request_id})
+    graph[-1].append(lock)
+    app.dependency_overrides[current_user] = lambda: {'id': 2, 'name': 'Controller', 'role': 'PROJECT_CONTROLLER'}
+    assert client.delete(f'/api/projects/{pid}').status_code == 200
+    assert get('projects', pid)['active'] is False
+    assert get('modules', mid)['active'] is False
+    assert client.put(f'/api/projects/{pid}/activate', json={}).status_code == 200
+    # Retired endpoints cannot queue new requests or apply an old one later.
+    assert client.post('/api/project-deactivation-requests', json={'projectId': pid}).status_code == 410
+    app.dependency_overrides[current_user] = lambda: {'id': 1, 'name': 'Captain', 'role': 'CAPTAIN'}
+    assert client.put(f'/api/project-deactivation-requests/{request_id}/approve', json={}).status_code == 410
+    assert get('projects', pid)['active'] is True
 
 
 def test_completion_alert_is_atomic_and_not_repeated_on_save(graph):

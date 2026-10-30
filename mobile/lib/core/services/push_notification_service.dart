@@ -44,7 +44,13 @@ Future<void> firebaseBackgroundMessage(RemoteMessage message) async {
 /// [initialize] runs once in main.dart, [syncToken] runs after authentication
 /// and retries on resume, and [unregister] runs on logout.
 class PushNotificationService with WidgetsBindingObserver {
-  PushNotificationService._();
+  PushNotificationService._() : _synchronize = null;
+
+  @visibleForTesting
+  PushNotificationService.forTesting(Future<void> Function(String) synchronize)
+      : _synchronize = synchronize;
+
+  final Future<void> Function(String)? _synchronize;
 
   static final PushNotificationService instance = PushNotificationService._();
 
@@ -72,6 +78,8 @@ class PushNotificationService with WidgetsBindingObserver {
   StreamSubscription<String>? _tokenSubscription;
   Future<void>? _registration;
   Future<void>? _tokenSync;
+  Timer? _registrationRetry;
+  int _registrationRetryCount = 0;
   String? _employeeCode;
   int _syncGeneration = 0;
   static const _deviceStorage=FlutterSecureStorage();
@@ -167,11 +175,28 @@ class PushNotificationService with WidgetsBindingObserver {
     final generation = _syncGeneration;
     await requestPermission();
     if (generation != _syncGeneration) return;
-    try { await _syncToken(employeeCode); }
-    on FirebaseException catch(e) { debugPrint('Push registration unavailable: ${e.code}'); }
-    on PlatformException catch(e) { debugPrint('Push registration unavailable: ${e.code}'); }
-    on TimeoutException { debugPrint('Push registration timed out'); }
-    on Exception { debugPrint('Push registration failed; will retry on resume'); }
+    try {
+      await (_synchronize?.call(employeeCode) ?? _syncToken(employeeCode));
+      _registrationRetry?.cancel();
+      _registrationRetry = null;
+      _registrationRetryCount = 0;
+    } on Exception {
+      debugPrint('Push registration failed; scheduling retry');
+      _scheduleRegistrationRetry(employeeCode, generation);
+    }
+  }
+
+  void _scheduleRegistrationRetry(String employeeCode, int generation) {
+    if (generation != _syncGeneration || _employeeCode != employeeCode) return;
+    _registrationRetry?.cancel();
+    final seconds = [5, 15, 30, 60][_registrationRetryCount.clamp(0, 3)];
+    _registrationRetryCount++;
+    _registrationRetry = Timer(Duration(seconds: seconds), () {
+      _registrationRetry = null;
+      if (generation == _syncGeneration && _employeeCode == employeeCode) {
+        unawaited(syncToken(employeeCode));
+      }
+    });
   }
 
   /// Shows the system "Allow notifications?" prompt (Android 13+) if it
@@ -194,7 +219,7 @@ class PushNotificationService with WidgetsBindingObserver {
     final generation = _syncGeneration;
     if (FirebaseEnvironment.emulator || kIsWeb) return;
     await initialize();
-    if(!_initialized) return;
+    if(!_initialized) throw Exception('Push initialization is not ready');
     final permission=await FirebaseMessaging.instance.requestPermission();
     if(permission.authorizationStatus==AuthorizationStatus.denied) return;
     final uid=FirebaseAuth.instance.currentUser?.uid;
@@ -212,10 +237,14 @@ class PushNotificationService with WidgetsBindingObserver {
     // Keep listening even if the initial getToken call fails while offline.
     _tokenSubscription = FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
       if (generation != _syncGeneration) return;
-      _registration=_registerToken(employeeCode, newToken,uid).catchError((Object error) {debugPrint('Push token refresh registration failed');});
+      _registration=_registerToken(employeeCode, newToken,uid).catchError((Object error) {
+        debugPrint('Push token refresh registration failed');
+        _scheduleRegistrationRetry(employeeCode, generation);
+      });
     });
     final token = await FirebaseMessaging.instance.getToken().timeout(const Duration(seconds:10));
-    if (token != null && generation == _syncGeneration) {
+    if (token == null) throw Exception('Push token is not ready');
+    if (generation == _syncGeneration) {
       await (_registration=_registerToken(employeeCode, token,uid));
     }
   }
@@ -242,6 +271,9 @@ class PushNotificationService with WidgetsBindingObserver {
   Future<void> unregister(String employeeCode) async {
     _employeeCode = null;
     _syncGeneration++;
+    _registrationRetry?.cancel();
+    _registrationRetry = null;
+    _registrationRetryCount = 0;
     try { await _tokenSync?.timeout(const Duration(seconds:20)); }
     on Exception { debugPrint('Pending push sync ended during logout'); }
     await _tokenSubscription?.cancel(); _tokenSubscription=null;
@@ -282,7 +314,8 @@ class PushNotificationService with WidgetsBindingObserver {
     final milestonePercent = (milestonePercentRaw != null && milestonePercentRaw.isNotEmpty)
         ? int.tryParse(milestonePercentRaw)
         : null;
-    final accentColor = type == NotificationType.moduleMilestoneReached
+    final accentColor = type == NotificationType.moduleMilestoneReached ||
+            type == NotificationType.projectMilestoneReached
         ? type.alertColor(milestonePercent)
         : null;
 

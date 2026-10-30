@@ -30,7 +30,7 @@ from .roster import refresh_project_roster
 from .approvals import claim_pending
 from .module_validation import validate_module, MODULE_FIELDS, WORK_STAGES, STATUSES
 from .performance import PerformanceMiddleware, install_firestore_spans, span
-from .module_events import queue_completion
+from .module_events import queue_progress_events
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -116,7 +116,10 @@ def health(): return {'status':'ok','environment':settings.environment,'project'
 
 @app.post('/api/auth/login')
 async def login(body: dict, request: Request):
-    identifier = str(body.get('employeeCode','')).strip().lower()
+    identifier = str(body.get('employeeCode','')).strip()
+    if '@' not in identifier and identifier != identifier.upper():
+        raise HTTPException(401,'Employee code must be uppercase.')
+    identifier = identifier.lower()
     if len(identifier)>254 or not body.get('password'): raise HTTPException(401,'Invalid credentials')
     # Firebase owns password verification, throttling and refresh token issuance.
     email = identifier if '@' in identifier else f'{identifier}@accounts.crompton.invalid'
@@ -336,7 +339,7 @@ def decide_worklog(key: str, action: str, body: dict, user=Depends(current_user)
         changes={'approvalStatus':'APPROVED' if action=='approve' else 'REJECTED','rejectionReason':str(body.get('rejectionReason',''))[:1000],'approvedById':user['id'],'approvedByName':user['name'],'approvedAt':datetime.now(timezone.utc).isoformat()}
         if action=='approve' and module:
             total=(module.get('completedSeconds') or 0)+(row.get('billableDurationSeconds') or 0)
-            queue_completion(tx,module,module|{'completedMinutes':total//60})
+            queue_progress_events(tx,module,module|{'completedSeconds':total,'completedMinutes':total//60})
             tx.update(module_ref,{'completedSeconds':total,'completedMinutes':total//60,'completedHours':total//3600})
         tx.update(ref,changes)
         if action=='reject' and ledger:
@@ -370,6 +373,8 @@ def privileged_action(collection: str,key: str,action: str,body: dict,user=Depen
     if collection not in allowed: raise HTTPException(404,'Not found')
     if action in ('activate','delete') and collection not in ('projects','modules'): raise HTTPException(404,'Unknown action')
     if action=='work-stage' and collection!='modules': raise HTTPException(404,'Unknown action')
+    if collection=='project-deactivation-requests':
+        raise HTTPException(410,'Project activation and deactivation no longer require approval. Use Projects to change the project status directly.')
     if action in ('approve','reject') and not collection.endswith('requests'): raise HTTPException(404,'Unknown action')
     ref=db.collection(collection).document(key)
     @firestore.transactional
@@ -446,6 +451,9 @@ def privileged_action(collection: str,key: str,action: str,body: dict,user=Depen
 @app.post('/api/{collection}')
 def create_request(collection: str,body: dict,user=Depends(current_user)):
     if collection not in ('module-change-requests','project-deactivation-requests','billing-status-change-requests'): raise HTTPException(404,'Not found')
+    if collection=='project-deactivation-requests':
+        manager(user)
+        raise HTTPException(410,'Project deactivation no longer requires approval. Deactivate the project directly from Projects.')
     require(user,'CAPTAIN','PROJECT_CONTROLLER','TEAM_LEADER')
     if collection=='billing-status-change-requests': manager(user)
     key=next_id()

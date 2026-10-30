@@ -133,6 +133,11 @@ extension NotificationTypeX on NotificationType {
   /// other notification type uses. Falls back to [color] otherwise (wrong
   /// type, or [milestonePercent] not yet known).
   Color alertColor(int? milestonePercent) {
+    if (this == NotificationType.projectMilestoneReached && milestonePercent != null) {
+      if (milestonePercent >= 75) return AppColors.statusCancelled;
+      if (milestonePercent >= 50) return AppColors.statusOnHold;
+      if (milestonePercent >= 25) return AppColors.statusActive;
+    }
     if (this == NotificationType.moduleMilestoneReached && milestonePercent != null) {
       if (milestonePercent >= 90) return AppColors.statusCancelled;
       if (milestonePercent >= 60) return AppColors.statusOnHold;

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../model/employee.dart';
 import '../model/employee_identity_validation.dart';
-import 'package:provider/provider.dart';
 
 import '../../../core/utils/navigation_guard.dart';
 import '../../../core/utils/snackbar_util.dart';
@@ -11,7 +10,6 @@ import '../../../shared/enums/user_role.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../auth/model/api_result.dart';
 import '../../projects/widgets/review_summary_card.dart';
-import '../viewmodel/employee_view_model.dart';
 
 /// Read-only confirmation step shown between the Add/Edit Employee form and
 /// the actual save, per the "review before you commit" flow: form -> Review
@@ -33,6 +31,9 @@ class ReviewEmployeeScreen extends StatefulWidget {
   final String phone;
   final String email;
   final Future<ApiResult> Function() onConfirmSave;
+
+  /// Only refreshes field errors after a failed save. The form must validate
+  /// the displayed contacts before pushing this review screen.
   final Future<ApiResult> Function() onValidateIdentity;
 
   const ReviewEmployeeScreen({
@@ -52,24 +53,25 @@ class ReviewEmployeeScreen extends StatefulWidget {
 }
 
 class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
-  bool _checkingIdentity = true;
+  bool _checkingIdentity = false;
   bool _confirming = false;
+  bool _saving = false;
   Map<String, String> _identityErrors = {};
   String? _identityCheckError;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _validateIdentity(); });
-  }
-
   Future<bool> _validateIdentity() async {
-    setState(() { _checkingIdentity = true; _identityCheckError = null; });
+    setState(() {
+      _checkingIdentity = true;
+      _identityCheckError = null;
+    });
     ApiResult result;
     try {
       result = await widget.onValidateIdentity();
     } catch (_) {
-      result = ApiResult(success: false, message: 'Unable to validate employee details. Please retry.');
+      result = ApiResult(
+        success: false,
+        message: 'Unable to validate employee details. Please retry.',
+      );
     }
     if (!mounted) return false;
     final validation = result.data;
@@ -78,7 +80,9 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
       if (result.success && validation is EmployeeIdentityValidation) {
         _identityErrors = validation.errors;
       } else {
-        _identityCheckError = result.success ? 'Unable to validate employee details. Please retry.' : result.message;
+        _identityCheckError = result.success
+            ? 'Unable to validate employee details. Please retry.'
+            : result.message;
       }
     });
     return _identityCheckError == null && _identityErrors.isEmpty;
@@ -109,7 +113,12 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
   }
 
   Future<void> _handleConfirm(BuildContext context) async {
-    if (_confirming || _checkingIdentity || _identityErrors.isNotEmpty || _identityCheckError != null) return;
+    if (_confirming ||
+        _checkingIdentity ||
+        _identityErrors.isNotEmpty ||
+        _identityCheckError != null) {
+      return;
+    }
     setState(() => _confirming = true);
     try {
       await _confirmAndSave(context);
@@ -123,23 +132,39 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
     // dialog-confirming Save runs after an await, when this screen's
     // context may be stale.
     final messenger = ScaffoldMessenger.of(context);
-    if (!await _validateIdentity() || !context.mounted) return;
+    // Next already validated these unchanged details. The save endpoint checks
+    // uniqueness atomically, so repeating preflight requests adds no protection.
     final confirmed = await _showConfirmDialog(context);
     if (!confirmed || !context.mounted) return;
-    if (!await _validateIdentity() || !context.mounted) return;
 
-    final result = await widget.onConfirmSave();
+    setState(() => _saving = true);
+    ApiResult result;
+    try {
+      result = await widget.onConfirmSave();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
     if (!context.mounted) return;
 
     if (result.success) {
-      final employee=result.data;
-      if(employee is Employee && !widget.isEditMode) {
-        await showDialog<void>(context:context,builder:(dialogContext)=>AlertDialog(
-          title:const Text('Account created'),
-          content:SelectableText('Employee code: ${employee.employeeCode}\n\n${result.message}\n\nThe employee should open Activate Account, verify the email OTP, and set their password.'),
-          actions:[TextButton(onPressed:()=>Navigator.pop(dialogContext),child:const Text('Done'))],
-        ));
-        if(!context.mounted) return;
+      final employee = result.data;
+      if (employee is Employee && !widget.isEditMode) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Account created'),
+            content: SelectableText(
+              'Employee code: ${employee.employeeCode}\n\n${result.message}\n\nThe employee should open Activate Account, verify the email OTP, and set their password.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        );
+        if (!context.mounted) return;
       }
       // Don't show the message here: this screen pops immediately and the
       // app-wide SnackbarDismissingObserver (main.dart) clears any snackbar
@@ -148,17 +173,15 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
       // it only once every pop has settled.
       Navigator.pop(context, result.message);
     } else {
-      await _validateIdentity();
-      if (!context.mounted) return;
       SnackbarUtil.showErrorOn(messenger, result.message);
+      await _validateIdentity();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final viewModel = context.watch<EmployeeViewModel>();
     final roleLabel = widget.role.displayLabel;
-    final busy = viewModel.isSaving || _confirming || _checkingIdentity;
+    final busy = _saving || _confirming || _checkingIdentity;
 
     return Scaffold(
       appBar: AppBar(
@@ -180,18 +203,34 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
                 rows: [
                   ReviewDetailRow(AppStrings.employeeFieldName, widget.name),
                   ReviewDetailRow(AppStrings.employeeFieldRole, roleLabel),
-                  ReviewDetailRow(AppStrings.employeeFieldCode, widget.employeeCode),
+                  ReviewDetailRow(
+                    AppStrings.employeeFieldCode,
+                    widget.employeeCode,
+                  ),
                   ReviewDetailRow(AppStrings.employeeFieldPhone, widget.phone),
                   ReviewDetailRow(AppStrings.employeeFieldEmail, widget.email),
                 ],
               ),
               const SizedBox(height: AppDimensions.cardSpacing),
               for (final error in _identityErrors.values)
-                Padding(padding: const EdgeInsets.only(bottom: 8), child: Text(error,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error))),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    error,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
               if (_identityCheckError != null) ...[
-                Text(_identityCheckError!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
-                TextButton(onPressed: busy ? null : _validateIdentity, child: const Text('Retry validation')),
+                Text(
+                  _identityCheckError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                TextButton(
+                  onPressed: busy ? null : _validateIdentity,
+                  child: const Text('Retry validation'),
+                ),
               ],
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -213,6 +252,16 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
                   ),
                 ],
               ),
+              if (_saving || _checkingIdentity) ...[
+                const SizedBox(height: AppDimensions.cardSpacing),
+                const LinearProgressIndicator(),
+                const SizedBox(height: 8),
+                Text(
+                  _saving
+                      ? 'Saving employee...'
+                      : 'Checking employee details...',
+                ),
+              ],
               const SizedBox(height: AppDimensions.sectionSpacing),
               Row(
                 children: [
@@ -220,7 +269,7 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
                     child: AppButton(
                       text: AppStrings.reviewEmployeeEditButton,
                       outlined: true,
-                      onPressed: viewModel.isSaving || _confirming
+                      onPressed: _saving || _confirming
                           ? null
                           : () => Navigator.pop(context),
                     ),
@@ -229,8 +278,10 @@ class _ReviewEmployeeScreenState extends State<ReviewEmployeeScreen> {
                   Expanded(
                     child: AppButton(
                       text: AppStrings.reviewEmployeeConfirmButton,
-                      isLoading: viewModel.isSaving || _checkingIdentity,
-                      onPressed: busy || _identityErrors.isNotEmpty || _identityCheckError != null
+                      onPressed:
+                          busy ||
+                              _identityErrors.isNotEmpty ||
+                              _identityCheckError != null
                           ? null
                           : () => _handleConfirm(context),
                     ),

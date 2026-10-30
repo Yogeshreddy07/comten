@@ -118,7 +118,11 @@ class ApiService {
           body: jsonEncode(body),
         )
         .timeout(timeout ?? _timeout);
-    if (response.statusCode < 300) await AccountCache.instance.invalidateData();
+    // Identity validation is read-only; do not clear and rewrite the encrypted
+    // data cache before allowing Next to open the employee review page.
+    if (response.statusCode < 300 && endpoint != '/employees/validate-identity') {
+      await AccountCache.instance.invalidateData();
+    }
     return _checkSession(response);
   }
 

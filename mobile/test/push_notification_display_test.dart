@@ -106,4 +106,46 @@ void main() {
     await pumpEventQueue();
     expect(requests, 1);
   });
+  testWidgets('failed registration retries while app stays open and stops after success', (tester) async {
+    var attempts = 0;
+    final service = PushNotificationService.forTesting((_) async {
+      attempts++;
+      if (attempts == 1) throw Exception('Connection not ready');
+    });
+    await service.syncToken('SYNTHETIC');
+    expect(attempts, 1);
+    await tester.pump(const Duration(seconds: 5));
+    expect(attempts, 2);
+    await tester.pump(const Duration(minutes: 2));
+    expect(attempts, 2);
+    await service.unregister('SYNTHETIC');
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('logout cancels a scheduled registration retry', (tester) async {
+    var attempts = 0;
+    final service = PushNotificationService.forTesting((_) async {
+      attempts++;
+      throw Exception('Connection not ready');
+    });
+    await service.syncToken('SYNTHETIC');
+    await service.unregister('SYNTHETIC');
+    await tester.pump(const Duration(minutes: 2));
+    expect(attempts, 1);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  test('project milestone percent and accent reach the native notification', () async {
+    await PushNotificationService.instance.showForegroundNotification(
+      const RemoteMessage(data: {'notificationId': '999', 'type': 'PROJECT_MILESTONE_REACHED',
+        'projectId': '100', 'milestonePercent': '25'},
+        notification: RemoteNotification(title: 'Project 25% completed', body: 'Synthetic project')),
+    );
+    final shown = calls.singleWhere((call) => call.method == 'show');
+    final args = Map<String, dynamic>.from(shown.arguments as Map);
+    final android = Map<String, dynamic>.from(args['platformSpecifics'] as Map);
+    expect(android['colorRed'], isNotNull);
+    expect(jsonDecode(args['payload'] as String)['milestonePercent'], '25');
+  });
+
 }

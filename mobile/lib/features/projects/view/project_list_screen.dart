@@ -120,7 +120,7 @@ class _ProjectListScreenState extends State<ProjectListScreen> {
       context,
       title: 'Deactivate Project',
       message: 'Are you sure you want to deactivate "${project.projectName}"? '
-          'It will stay in the list marked as inactive. Projects in Billing require Captain approval before deactivation.',
+          'It will stay in the list marked as inactive.',
       confirmLabel: 'Deactivate',
     );
 

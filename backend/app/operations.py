@@ -9,7 +9,7 @@ from .messaging import notify
 from .roster import refresh_project_roster
 from .module_validation import validate_module
 from .mobile_contracts import module_response,effective_status
-from .module_events import queue_completion
+from .module_events import queue_progress_events
 
 router=APIRouter(prefix='/api')
 
@@ -92,7 +92,7 @@ def update_module(mid: int,body: dict,user=Depends(current_user)):
             # Read the query before writes so simultaneous submissions conflict
             # and retry against the same authoritative leader assignment.
             pending=[s for s in db.collection('work-logs').where(filter=FieldFilter('moduleId','==',mid)).stream(transaction=tx) if s.to_dict().get('approvalStatus')=='PENDING']
-        queue_completion(tx,current,current|changes)
+        queue_progress_events(tx,current,current|changes)
         tx.update(ref,changes)
         for snapshot in pending: tx.update(snapshot.reference,{'teamLeadId':changes['teamLeadId']})
         return changes
@@ -109,27 +109,6 @@ def deactivate(key: str,request: Request,user=Depends(current_user)):
     collection=request.url.path.split('/')[2]
     record=get(collection,key)
     if not record: raise HTTPException(404,'Record not found')
-    if collection=='projects' and user['role']=='PROJECT_CONTROLLER':
-        modules=list(all_rows('modules',[('projectId',int(key))]))
-        if any(m.get('workStage')=='BILLING' for m in modules):
-            p=record;request_id=int(datetime.now(timezone.utc).timestamp()*1000000)
-            @firestore.transactional
-            def submit(tx):
-                held=db.collection('pending-approvals').document(f'project-deactivation-requests-{p["id"]}').get(transaction=tx).to_dict() or {}
-                if held.get('requestId') is not None:
-                    existing=db.collection('project-deactivation-requests').document(str(held['requestId'])).get(transaction=tx).to_dict() or {}
-                    if existing.get('approvalStatus')=='PENDING':
-                        return False
-                captains=[s.to_dict() for s in db.collection('employees').where(filter=FieldFilter('role','==','CAPTAIN')).stream(transaction=tx)]
-                claim_pending(tx,'project-deactivation-requests',p['id'],request_id)
-                tx.create(db.collection('project-deactivation-requests').document(str(request_id)),{'id':request_id,'projectId':p['id'],'projectName':p['projectName'],'projectCode':p['projectCode'],'requestedById':user['id'],'requestedByName':user['name'],'approvalStatus':'PENDING','status':'PENDING','createdAt':datetime.now(timezone.utc).isoformat()})
-                for offset,captain in enumerate(captains,1):
-                    if captain.get('active') and not captain.get('deleted'):
-                        nid=request_id+offset
-                        tx.create(db.collection('notifications').document(str(nid)),{'id':nid,'userId':captain['id'],'title':'Project deactivation approval requested','message':p['projectName'],'type':'PROJECT_DEACTIVATION_REQUESTED','projectId':p['id'],'read':False,'pushPending':True,'createdAt':datetime.now(timezone.utc).isoformat()})
-                return True
-            created=transact(submit)
-            return {'success':True,'message':'Deactivation submitted for Captain approval. The project stays active until approved.' if created else 'Deactivation is already awaiting Captain approval. Open Approvals with a Captain account to decide it.','data':p|{'deactivationPending':True}}
     ref=db.collection(collection).document(key)
     @firestore.transactional
     def disable(tx):

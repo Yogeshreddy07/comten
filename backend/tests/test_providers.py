@@ -274,6 +274,12 @@ def test_widget_rejects_missing_request_id_and_legacy_template_config(configured
 
 @pytest.mark.parametrize('reason,expected',[
     ('OTP expired','OTP has expired'),
+    ('OTP has expired','OTP has expired'),
+    ('Invalid or expired OTP','Invalid or expired verification code'),
+    ('OTP is invalid or has expired','Invalid or expired verification code'),
+    ('Invalid/expired OTP','Invalid or expired verification code'),
+    ('Expired or invalid OTP','Invalid or expired verification code'),
+    ('Maximum attempts exceeded; OTP expired','Too many incorrect attempts'),
     ('Maximum verification attempts exceeded','Too many incorrect attempts'),
     ('Invalid OTP','Invalid or expired verification code')])
 def test_widget_distinguishes_expiry_attempt_limit_and_incorrect_code(configured,monkeypatch,reason,expected):
@@ -342,3 +348,35 @@ def test_resend_failures_are_recorded_without_provider_detail(resend,monkeypatch
     with pytest.raises(HTTPException) as error: asyncio.run(adapters.email('test@example.invalid','Test','Test','<p>Test</p>',delivery_key=key))
     assert error.value.status_code==502 and 'private' not in caplog.text and 'test@example.invalid' not in caplog.text
     with pytest.raises(HTTPException): reserve('resend',key)
+
+
+def test_push_partial_device_failure_keeps_receipts_and_only_retries_failed_device(monkeypatch, push_employees):
+    from app.store import db
+    import hashlib
+    uid = push_employees()
+    key, ref = _push_fixture(monkeypatch, uid, registered=True)
+    extra = db.collection('device-tokens').document(f'push-test-extra-{key}')
+    extra.set({'userId': uid, 'token': 'synthetic-second-device'})
+    calls = []
+    def send(message):
+        calls.append(message.token)
+        if message.token == 'synthetic-second-device':
+            raise RuntimeError('Temporary outage')
+    monkeypatch.setattr(adapters.messaging, 'send', send)
+    try:
+        adapters.deliver_push(key)
+        state = ref.get().to_dict()
+        assert state['pushPending'] and state['pushAttemptCount'] == 1
+        assert state['pushAcceptedDeviceCount'] == 1
+        assert state['pushLastErrors'] == ['provider-send-failed']
+        assert state['pushAcceptedAt'] and state['pushLastAttemptAt']
+        assert state['pushAcceptedTokenHashes'] == [hashlib.sha256(f'synthetic-{key}'.encode()).hexdigest()]
+        calls.clear()
+        monkeypatch.setattr(adapters.messaging, 'send', lambda message: calls.append(message.token))
+        adapters.deliver_push(key)
+        state = ref.get().to_dict()
+        assert not state['pushPending'] and state['pushAttemptCount'] == 2
+        assert state['pushAcceptedDeviceCount'] == 2
+        assert calls == ['synthetic-second-device']
+    finally:
+        extra.delete()
