@@ -6,6 +6,7 @@ import '../../../core/utils/navigation_guard.dart';
 import '../../../core/utils/snackbar_util.dart';
 import '../../../core/utils/validators.dart';
 import '../viewmodel/auth_viewmodel.dart';
+import '../model/api_result.dart';
 import '../widgets/auth_button.dart';
 import '../widgets/auth_header.dart';
 import '../widgets/auth_scaffold.dart';
@@ -28,6 +29,25 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
   int _remaining = 0;
   Timer? _timer;
 
+  void _cooldown(int seconds) {
+    _timer?.cancel();
+    final until = DateTime.now().add(Duration(seconds: seconds));
+    setState(() => _remaining = seconds);
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) { timer.cancel(); return; }
+      final milliseconds = until.difference(DateTime.now()).inMilliseconds;
+      setState(() => _remaining = milliseconds > 0 ? (milliseconds / 1000).ceil() : 0);
+      if (_remaining == 0) timer.cancel();
+    });
+  }
+
+  void _showFailure(ApiResult result) {
+    if (result.data is Map && result.data['retryAfterSeconds'] is int) {
+      _cooldown(result.data['retryAfterSeconds'] as int);
+    }
+    SnackbarUtil.showError(context, result.message);
+  }
+
   @override
   void dispose() { _timer?.cancel(); _code.dispose(); _otp.dispose(); super.dispose(); }
 
@@ -39,7 +59,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     if (vm.isLoading) return;
     final result = await vm.sendActivationOtp(_code.text.trim().toUpperCase());
     if (!mounted) return;
-    if (!result.success) { SnackbarUtil.showError(context, result.message); return; }
+    if (!result.success) { _showFailure(result); return; }
     if (result.data is Map && result.data['stage'] == 'PHONE') {
       _timer?.cancel();
       if (!context.canPushRoute) return;
@@ -52,12 +72,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
       _maskedEmail = result.data is Map && result.data['maskedEmail'] is String
           ? result.data['maskedEmail'] as String : 'your registered email';
     });
-    _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) { timer.cancel(); return; }
-      setState(() => _remaining--);
-      if (_remaining <= 0) timer.cancel();
-    });
+    _cooldown(60);
     SnackbarUtil.showSuccess(context, result.message);
   }
 
@@ -67,7 +82,7 @@ class _ActivateAccountScreenState extends State<ActivateAccountScreen> {
     if (vm.isLoading) return;
     final result = await vm.verifyActivationOtp(_code.text.trim().toUpperCase(), _otp.text.trim());
     if (!mounted) return;
-    if (!result.success) { SnackbarUtil.showError(context, result.message); return; }
+    if (!result.success) { _showFailure(result); return; }
     _timer?.cancel();
     if (!context.canPushRoute) return;
     Navigator.push(context, MaterialPageRoute(builder: (_) => CreatePasswordScreen(employeeCode: _code.text.trim().toUpperCase())));

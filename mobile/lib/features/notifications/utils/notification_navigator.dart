@@ -211,9 +211,7 @@ class NotificationNavigator {
         );
         return;
 
-      // Sent only to the module's assigned employees and its Team Lead (see
-      // `NotificationServiceImpl#notifyModuleMilestone`) - opens that
-      // module's own details page directly rather than the project's.
+      // Module progress and completion alerts open that module's details.
       case NotificationType.moduleMilestoneReached:
         if (moduleId == null) {
           Navigator.push(
@@ -237,8 +235,7 @@ class NotificationNavigator {
       // remaining-hours alert is module-specific, but the frontend
       // notification model doesn't carry a moduleId for it, so it routes to
       // the same project-level screen as the closest available fallback.
-      // Project milestones use combined approved hours across modules and
-      // open the project summary that owns that progress.
+      // Retain project milestone routing for historical notifications.
       case NotificationType.projectCreated:
       case NotificationType.projectUpdated:
       case NotificationType.projectDeadlineExtended:

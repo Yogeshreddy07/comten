@@ -69,7 +69,8 @@ class AttemptsRepository extends ResumeRepository {
     final left = 3 - phoneAttempts;
     return ApiResult(success: false,
       message: left > 0 ? 'Incorrect OTP. $left attempt${left == 1 ? '' : 's'} left.'
-          : 'No attempts left. Please try again after some time.');
+          : 'No attempts left. Please try again after 15 minutes.',
+      data: left <= 0 ? {'retryAfterSeconds':900} : null);
   }
 }
 
@@ -103,10 +104,10 @@ void main(){
       if (complete) {
         expect(find.text('Account activated'), findsOneWidget);
       } else {
-        expect(find.text('No attempts left. Please try again after some time.'), findsOneWidget);
+        expect(find.text('No attempts left. Please try again after 15 minutes.'), findsOneWidget);
         expect(find.textContaining('OTP has expired'), findsNothing);
-        final resend = tester.widget<TextButton>(find.widgetWithText(TextButton, 'Resend Phone OTP'));
-        expect(resend.onPressed, isNotNull);
+        final resend = tester.widget<TextButton>(find.widgetWithText(TextButton, 'Resend OTP in 900 seconds'));
+        expect(resend.onPressed, isNull);
       }
       expect(repository.phoneAttempts, 3);
       await tester.pumpWidget(const SizedBox());

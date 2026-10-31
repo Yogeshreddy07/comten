@@ -35,7 +35,7 @@ def test_firebase_auth_and_all_roles(tokens):
 
 
 def test_employee_provisioning_permission_and_activation(tokens):
-    body={'employeeCode':'SYN'+uuid.uuid4().hex[:10],'name':'Synthetic Employee','email':uuid.uuid4().hex+'@example.invalid','phone':'','role':'EMPLOYEE'}
+    body={'employeeCode':'SYN'+uuid.uuid4().hex[:10].upper(),'name':'Synthetic Employee','email':uuid.uuid4().hex+'@example.invalid','phone':'','role':'EMPLOYEE'}
     assert client.post('/api/employees',json=body,headers=tokens['employee']).status_code==403
     response=client.post('/api/employees',json=body,headers=tokens['captain'])
     assert response.status_code==200,response.text
@@ -140,7 +140,7 @@ def test_validation_does_not_echo_secrets(tokens):
 
 
 def test_recovery_is_single_use_and_counters_commit(tokens):
-    code='REC'+uuid.uuid4().hex[:8]
+    code='REC'+uuid.uuid4().hex[:8].upper()
     response=client.post('/api/employees',json={'employeeCode':code,'name':'Recovery synthetic','email':'recover@example.invalid','role':'EMPLOYEE'},headers=tokens['captain'])
     assert response.status_code==200,response.text
     uid=response.json()['data']['id']
@@ -217,13 +217,14 @@ def test_phone_otp_cooldown_expiry_attempts_and_replay(tokens):
         assert 1<=wait.json()['data']['retryAfterSeconds']<=60
         assert int(wait.headers['Retry-After'])==wait.json()['data']['retryAfterSeconds']
         assert 'otp' not in ref.get().to_dict()
-        for left in (4,3,2,1,0):
+        for left in (2,1,0):
             wrong=client.post('/api/auth/phone/verify',json={'otp':'000000'},headers=tokens['employee'])
             assert wrong.status_code==401
             assert (f'{left} attempt' if left else 'No attempts left') in wrong.json()['message']
-        assert client.post('/api/auth/phone/verify',json={'otp':'123456'},headers=tokens['employee']).status_code==401
-        assert ref.get().to_dict()['attempts']==5
-        ref.update({'attempts':0,'expires':time.time()-1})
+        assert client.post('/api/auth/phone/verify',json={'otp':'123456'},headers=tokens['employee']).status_code==429
+        assert ref.get().to_dict()['attempts']==3
+        assert client.post('/api/auth/phone/send',json={'phone':'9000000001'},headers=tokens['employee']).status_code==429
+        ref.update({'attempts':0,'lockedUntil':0,'expires':time.time()-1})
         assert client.post('/api/auth/phone/verify',json={'otp':'123456'},headers=tokens['employee']).status_code==401
         ref.update({'expires':time.time()+600})
         assert client.post('/api/auth/phone/verify',json={'otp':'123456'},headers=tokens['employee']).status_code==200
@@ -268,7 +269,7 @@ def test_msg91_firebase_linkage_concurrent_replay_and_changed_phone(tokens,monke
         employee.update({'phone':person.get('phone',''),'phoneVerified':person.get('phoneVerified',False)});ref.delete()
 
 
-def test_provider_attempt_limit_retires_code_and_allows_immediate_resend(monkeypatch):
+def test_provider_attempt_limit_locks_verify_and_resend_for_15_minutes(monkeypatch):
     import asyncio
     from fastapi import HTTPException
     from app import recovery
@@ -280,7 +281,7 @@ def test_provider_attempt_limit_retires_code_and_allows_immediate_resend(monkeyp
     async def send(*args): return 'synthetic-new-request'
     monkeypatch.setattr(recovery,'verify_msg91',reject)
     monkeypatch.setattr(recovery,'send_msg91',send)
-    ref.set({'challengeId':'synthetic','phone':'919000000088','sent':time.time(),'expires':time.time()+600,'attempts':3,'state':'SENT','widgetId':recovery.settings.msg91_widget_id,'providerRequestId':'synthetic-request'})
+    ref.set({'challengeId':'synthetic','phone':'919000000088','sent':time.time(),'expires':time.time()+600,'attempts':1,'state':'SENT','widgetId':recovery.settings.msg91_widget_id,'providerRequestId':'synthetic-request'})
     rate.set({'count':1,'lastSent':time.time(),'window':time.time()})
     try:
         with pytest.raises(HTTPException) as failure:
@@ -290,6 +291,12 @@ def test_provider_attempt_limit_retires_code_and_allows_immediate_resend(monkeyp
         with pytest.raises(HTTPException) as repeated:
             asyncio.run(recovery.phone_verify({'otp':'123456'},user=person))
         assert 'No attempts left' in repeated.value.detail
+        with pytest.raises(HTTPException) as blocked:
+            asyncio.run(recovery.phone_send({'phone':person['phone']},user=person))
+        assert blocked.value.status_code==429
+        assert 899 <= int(blocked.value.headers['Retry-After']) <= 900
+        ref.update({'lockedUntil':time.time()-1,'sent':0})
+        rate.update({'lastSent':0})
         response=asyncio.run(recovery.phone_send({'phone':person['phone']},user=person))
         assert response['success'] and ref.get().to_dict()['attempts']==0
         assert rate.get().to_dict()['count']==2
@@ -365,12 +372,12 @@ def test_widget_generic_rejection_counts_down_without_premature_expiry(monkeypat
              'expires': deadline, 'attempts': 0, 'state': 'SENT',
              'widgetId': 'synthetic-widget', 'providerRequestId': 'synthetic-request'})
     try:
-        for left in (4, 3, 2, 1):
+        for left in (2, 1):
             with pytest.raises(HTTPException) as failure:
                 asyncio.run(recovery.phone_verify({'otp': '000000'}, user=person))
             assert failure.value.detail == f'Incorrect OTP. {left} attempt{"s" if left != 1 else ""} left.'
             state = ref.get().to_dict()
-            assert state['attempts'] == 5 - left
+            assert state['attempts'] == 3 - left
             assert state['expires'] == deadline and state['busyUntil'] == 0
             assert not state.get('retiredMessage')
         if complete:
@@ -382,12 +389,12 @@ def test_widget_generic_rejection_counts_down_without_premature_expiry(monkeypat
                 asyncio.run(recovery.phone_verify({'otp': '000000'}, user=person))
             with pytest.raises(HTTPException, match='No attempts left'):
                 asyncio.run(recovery.phone_verify({'otp': '123456'}, user=person))
-            assert len(calls) == 5
+            assert len(calls) == 3
             # Exhaustion must not turn into expiry when the deadline later passes.
             ref.update({'expires': time.time() - 1})
             with pytest.raises(HTTPException, match='No attempts left'):
                 asyncio.run(recovery.phone_verify({'otp': '000000'}, user=person))
-            assert len(calls) == 5
+            assert len(calls) == 3
             assert get('employees', uid)['phoneVerified'] is False
     finally:
         ref.delete()

@@ -271,7 +271,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
     });
   }
 
-  Future<void> _startResendTimer(int seconds) async {
+  void _startResendTimer(int seconds) {
     setState(() {
       _secondsRemaining = seconds;
     });
@@ -307,8 +307,11 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
       setState(() {
         _currentStep = ForgotPasswordStep.otp;
       });
-      await _startResendTimer(60);
+      _startResendTimer(60);
     } else {
+      if (result.data is Map && result.data['retryAfterSeconds'] is int) {
+        _startResendTimer(result.data['retryAfterSeconds'] as int);
+      }
       SnackbarUtil.showError(context, result.message);
     }
   }
@@ -343,6 +346,9 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         _currentStep = ForgotPasswordStep.resetPassword;
       });
     } else {
+      if (result.data is Map && result.data['retryAfterSeconds'] is int) {
+        _startResendTimer(result.data['retryAfterSeconds'] as int);
+      }
       SnackbarUtil.showError(context, result.message);
       _otpInputKey.currentState?.clear();
     }

@@ -9,6 +9,7 @@ from .security import current_user
 from .store import db,get,rows,transact
 from .messaging import email,send_msg91,verify_msg91,normalize_phone,PHONE_OTP_LOCKED
 from .models import valid_password
+from .otp_policy import MAX_ATTEMPTS, LOCKOUT_SECONDS, LOCKED, wrong_otp, check_lock
 
 router=APIRouter(prefix='/api')
 GENERIC='If the supplied details match an active account, a verification code has been sent.'
@@ -34,12 +35,13 @@ async def send_otp(body: dict):
     @firestore.transactional
     def reserve(tx):
         previous=ref.get(transaction=tx).to_dict() or {}
+        check_lock(previous, now)
         count=previous.get('sendCount',0) if previous.get('sendWindow',0)>now-3600 else 0
         if previous.get('lastSent',0)>now-60:
             if previous.get('deliveryState') == 'ACCEPTED' and previous.get('recipientHash') == digest(person['email'].strip().lower()): return False
             raise HTTPException(429,'Wait one minute before requesting another OTP')
         if count>=5: raise HTTPException(429,'Too many OTP requests. Please try again later')
-        tx.set(ref,{'otpHash':digest(uid+':'+otp),'recipientHash':digest(person['email'].strip().lower()),'expires':now+600,'attempts':0,'lastSent':now,'resetHash':None,'deliveryId':challenge,'deliveryState':'SENDING','sendCount':count+1,'sendWindow':previous.get('sendWindow',now) if count else now})
+        tx.set(ref,{'otpHash':digest(uid+':'+otp),'recipientHash':digest(person['email'].strip().lower()),'expires':now+600,'attempts':0,'lockedUntil':0,'lastSent':now,'resetHash':None,'deliveryId':challenge,'deliveryState':'SENDING','sendCount':count+1,'sendWindow':previous.get('sendWindow',now) if count else now})
         return True
     if not transact(reserve): return {'success':True,'data':None,'message':GENERIC}
     try:
@@ -63,12 +65,18 @@ def verify_otp(body: dict):
     uid=str(person['id']);ref=db.collection('recovery').document(uid);proof=secrets.token_urlsafe(32)
     @firestore.transactional
     def verify(tx):
-        state=ref.get(transaction=tx).to_dict()
-        if not state or state.get('recipientHash') != digest(person['email'].strip().lower()) or state.get('deliveryState')!='ACCEPTED' or state.get('expires',0)<time.time() or state.get('attempts',0)>=5 or state.get('resetHash'): return False
+        state=ref.get(transaction=tx).to_dict() or {}
+        now=time.time()
+        check_lock(state, now)
+        if not state or state.get('recipientHash') != digest(person['email'].strip().lower()) or state.get('deliveryState')!='ACCEPTED' or state.get('expires',0)<now or state.get('attempts',0)>=MAX_ATTEMPTS or state.get('resetHash'): return 'Invalid or expired verification code'
         valid=hmac.compare_digest(state['otpHash'],digest(uid+':'+str(body.get('otp',''))))
-        tx.update(ref,{'attempts':state['attempts']+1,**({'resetHash':digest(proof),'otpHash':'consumed'} if valid else {})})
-        return valid
-    if not transact(verify): raise HTTPException(401,'Invalid or expired verification code')
+        attempts=state.get('attempts',0)+1
+        tx.update(ref,{'attempts':attempts,
+                      **({'lockedUntil':now+LOCKOUT_SECONDS} if not valid and attempts>=MAX_ATTEMPTS else {}),
+                      **({'resetHash':digest(proof),'otpHash':'consumed'} if valid else {})})
+        return None if valid else wrong_otp(attempts)
+    failure=transact(verify)
+    if failure: raise HTTPException(401,failure,headers={'Retry-After':str(LOCKOUT_SECONDS)} if failure==LOCKED else None)
     return {'success':True,'data':{'employeeCode':person['employeeCode'],'resetToken':proof},'message':'Code verified'}
 
 
@@ -112,13 +120,12 @@ async def phone_send(body: dict,user=Depends(current_user)):
     def reserve(tx):
         old=ref.get(transaction=tx).to_dict() or {}
         rate=throttle.get(transaction=tx).to_dict() or {}
+        check_lock(old, now)
         count=rate.get('count',0) if rate.get('window',0)>now-3600 else 0
-        # A locked-out code can be replaced immediately; the hourly cap still applies.
-        locked=old.get('attempts',0)>=5 and old.get('phone')==phone
         if count>=5:
             wait=max(1,int(rate.get('window',now)+3600-now)+1)
             raise HTTPException(429,'Too many OTP requests. Please try again later.',headers={'Retry-After':str(wait)})
-        if not locked and (old.get('sent',0)>now-60 or rate.get('lastSent',0)>now-60):
+        if old.get('sent',0)>now-60 or rate.get('lastSent',0)>now-60:
             wait=max(1,int(max(old.get('sent',0),rate.get('lastSent',0))+60-now)+1)
             raise HTTPException(429,f'Please wait {wait} seconds before requesting another code.',headers={'Retry-After':str(wait)})
         tx.set(ref,{'challengeId':challenge,'sent':now,'expires':now+600,'attempts':0,'phone':phone,'state':'SENDING'})
@@ -142,10 +149,11 @@ async def phone_verify(body: dict,user=Depends(current_user)):
     def claim(tx):
         row=ref.get(transaction=tx).to_dict()
         if not row or row.get('state')!='SENT': return 'OTP has expired. Tap Resend OTP to get a new code.'
+        check_lock(row, time.time())
         if row.get('retiredMessage'):
             return PHONE_OTP_LOCKED if row['retiredMessage'].startswith('Too many incorrect attempts') else row['retiredMessage']
-        # Exhaustion remains exhaustion even after the original deadline passes.
-        if row['attempts']>=5: return PHONE_OTP_LOCKED
+        # An exhausted challenge requires a fresh code after the lockout.
+        if row['attempts']>=MAX_ATTEMPTS: return 'OTP has expired. Tap Resend OTP to get a new code.'
         if row['expires']<time.time(): return 'OTP has expired. Tap Resend OTP to get a new code.'
         if row.get('busyUntil',0)>time.time(): return 'Verification already in progress. Please wait a moment and retry.'
         tx.update(ref,{'attempts':row['attempts']+1,'claim':claim_id,'busyUntil':time.time()+60})
@@ -165,21 +173,26 @@ async def phone_verify(body: dict,user=Depends(current_user)):
         retired_message = (PHONE_OTP_LOCKED if rejected and str(error.detail).startswith(
             ('Too many incorrect attempts', 'No attempts left')) else str(getattr(error, 'detail', '')))
         # Always release the claim so the next try is evaluated. Provider
-        # outages do not count against the user's attempts, and a code the
-        # provider retired is closed so a new one can be sent at once.
+        # outages do not count against attempts. Retired codes require a new
+        # challenge; provider exhaustion also starts the local lockout.
         @firestore.transactional
         def release(tx):
             current=ref.get(transaction=tx).to_dict() or {}
             if current.get('claim')!=claim_id: return
             change={'busyUntil':0}
-            if retired: change|={'attempts':5,'expires':0,'retiredMessage':retired_message}
+            if retired:
+                change|={'attempts':MAX_ATTEMPTS,'expires':0,'retiredMessage':retired_message}
+                if retired_message == PHONE_OTP_LOCKED:
+                    change['lockedUntil']=time.time()+LOCKOUT_SECONDS
+            elif wrong and current.get('attempts',0)>=MAX_ATTEMPTS:
+                change['lockedUntil']=time.time()+LOCKOUT_SECONDS
             elif not rejected: change['attempts']=max(current.get('attempts',1)-1,0)
             tx.update(ref,change)
         transact(release)
         if wrong:
-            left=5-row['attempts']-1
-            raise HTTPException(401,f'Incorrect OTP. {left} attempt{"s" if left!=1 else ""} left.' if left>0 else PHONE_OTP_LOCKED) from None
-        if retired: raise HTTPException(401,retired_message) from None
+            failure=wrong_otp(row['attempts']+1)
+            raise HTTPException(401,failure,headers={'Retry-After':str(LOCKOUT_SECONDS)} if failure==LOCKED else None) from None
+        if retired: raise HTTPException(401,retired_message,headers={'Retry-After':str(LOCKOUT_SECONDS)} if retired_message==LOCKED else None) from None
         if isinstance(error,HTTPException): raise
         raise HTTPException(502,'SMS verification is temporarily unavailable. Please retry.') from None
     @firestore.transactional

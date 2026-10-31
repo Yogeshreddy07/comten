@@ -38,10 +38,11 @@ def test_activation_attempts_expiry_recipient_binding_and_proof_replay(client):
     person=create(client);uid=str(person['id']);code=person['employeeCode']
     assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==200
     request={'employeeCode':code,'otp':'000000'}
-    for _ in range(5): assert client.post('/api/auth/signup/verify-otp',json=request).status_code==401
-    assert client.post('/api/auth/signup/verify-otp',json=request|{'otp':'123456'}).status_code==401
+    for _ in range(3): assert client.post('/api/auth/signup/verify-otp',json=request).status_code==401
+    assert client.post('/api/auth/signup/verify-otp',json=request|{'otp':'123456'}).status_code==429
     ref=db.collection('email-activation').document(uid)
-    ref.update({'lastSent':0})
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==429
+    ref.update({'lastSent':0, 'lockedUntil':time.time()-1})
     assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==200
     ref.update({'expires':time.time()-1})
     assert client.post('/api/auth/signup/verify-otp',json=request|{'otp':'123456'}).status_code==401
@@ -163,7 +164,7 @@ def test_activation_phone_reports_two_one_then_no_attempts_for_combined_provider
     monkeypatch.setattr(recovery.settings, 'msg91_widget_id', 'synthetic-widget')
     assert client.post('/api/auth/signup/phone/send-otp', json=request).status_code == 200
     ref = db.collection('phone-challenges').document(str(person['id']))
-    ref.update({'attempts': 2})
+    ref.update({'attempts': 0})
     deadline = ref.get().to_dict()['expires']
     for key, value in {'environment': 'development', 'allow_real_messages': True,
                        'msg91_dispatch_enabled': True, 'msg91_auth_key': 'synthetic',
@@ -177,15 +178,15 @@ def test_activation_phone_reports_two_one_then_no_attempts_for_combined_provider
     monkeypatch.setattr(messaging, 'provider_request', reject)
     try:
         for message in ('Incorrect OTP. 2 attempts left.', 'Incorrect OTP. 1 attempt left.',
-                        'No attempts left. Please try again after some time.'):
+                        'No attempts left. Please try again after 15 minutes.'):
             response = client.post('/api/auth/signup/phone/verify-otp', json=request | {'otp': '000000'})
             assert response.status_code == 401 and response.json()['message'] == message
             assert ref.get().to_dict()['expires'] == deadline
             assert not get('employees', person['id'])['phoneVerified']
             assert auth.get_user(str(person['id'])).disabled
         response = client.post('/api/auth/signup/phone/verify-otp', json=request | {'otp': '123456'})
-        assert response.status_code == 401
-        assert response.json()['message'] == 'No attempts left. Please try again after some time.'
+        assert response.status_code == 429
+        assert response.json()['message'] == 'No attempts left. Please try again after 15 minutes.'
         assert len(calls) == 3
     finally:
         ref.delete()
@@ -277,18 +278,23 @@ def test_send_otp_reports_unknown_and_already_active_codes(client):
 def test_wrong_otps_report_attempts_left_and_correct_otp_still_works(client):
     person=create(client);code=person['employeeCode']
     assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).json()['data']['stage']=='EMAIL'
-    for left in (4,3,2):
+    for left in (2,1):
         response=client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'000000'})
-        assert response.status_code==401 and f'{left} attempts left' in response.json()['message']
+        assert response.status_code==401 and f'{left} attempt' in response.json()['message']
     assert client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'}).status_code==200
 
 
-def test_locked_email_otp_can_be_resent_immediately(client):
+def test_locked_email_otp_requires_15_minutes_before_resend(client):
     person=create(client);code=person['employeeCode']
     client.post('/api/auth/signup/send-otp',json={'employeeCode':code})
-    for _ in range(5): client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'000000'})
+    for _ in range(3): client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'000000'})
     locked=client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'})
-    assert locked.status_code==401 and 'Resend' in locked.json()['message']
+    assert locked.status_code==429 and '15 minutes' in locked.json()['message']
+    assert 899 <= locked.json()['data']['retryAfterSeconds'] <= 900
+    assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==429
+    ref=db.collection('email-activation').document(str(person['id']))
+    ref.update({'lockedUntil':time.time()-1,'lastSent':0})
+    assert client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'}).status_code==401
     assert client.post('/api/auth/signup/send-otp',json={'employeeCode':code}).status_code==200
     assert client.post('/api/auth/signup/verify-otp',json={'employeeCode':code,'otp':'123456'}).status_code==200
 
@@ -303,7 +309,7 @@ def test_phone_pending_employee_resumes_at_phone_step(client):
     request={'employeeCode':person['employeeCode'],'phoneVerificationToken':data['phoneVerificationToken']}
     assert client.post('/api/auth/signup/phone/send-otp',json=request).status_code==200
     wrong=client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'000000'})
-    assert wrong.status_code==401 and '4 attempts left' in wrong.json()['message']
+    assert wrong.status_code==401 and '2 attempts left' in wrong.json()['message']
     assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'000000'}).status_code==401
     assert client.post('/api/auth/signup/phone/verify-otp',json=request|{'otp':'123456'}).status_code==200
     assert get('employees',person['id'])['activationStatus']=='ACTIVE'

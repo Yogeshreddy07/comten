@@ -99,7 +99,7 @@ class _FilesScreenState extends State<FilesScreen> {
         onChanged: _busy ? null : (value) { if (value != null) { _category = value; _load(); } },
       ),
       const SizedBox(height: 12),
-      if (!widget.readOnly) AppButton(text: 'Choose file', icon: Icons.attach_file, onPressed: _busy ? null : _pick, isLoading: _busy),
+      if (!widget.readOnly) AppButton(text: 'Choose file', onPressed: _busy ? null : _pick, isLoading: _busy),
       if (_busy) Padding(padding: const EdgeInsets.only(top: 12), child: LinearProgressIndicator(value: _progress)),
       if (_error != null) AppCard(child: Column(children: [Text(_error!), TextButton(onPressed: _busy ? null : _load, child: const Text('Retry'))])),
       Expanded(child: _loading ? const AppLoader(message: 'Loading attachments...') : RefreshIndicator(onRefresh: _load, child: ListView(children: [

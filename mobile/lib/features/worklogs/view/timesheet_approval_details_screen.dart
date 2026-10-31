@@ -10,7 +10,6 @@ import '../../../shared/dialogs/reject_timesheet_dialog.dart';
 import '../../../shared/enums/approval_status.dart';
 import '../../../shared/widgets/app_button.dart';
 import '../../../shared/widgets/app_card.dart';
-import '../../../shared/widgets/files_screen.dart';
 import '../../projects/widgets/review_summary_card.dart';
 import '../model/work_log.dart';
 import '../utils/work_log_duration_formatter.dart';
@@ -94,9 +93,6 @@ class _TimesheetApprovalDetailsScreenState
 
     return Scaffold(
       appBar: AppBar(
-        actions: [IconButton(tooltip: 'Attachments', icon: const Icon(Icons.attach_file), onPressed: () {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => FilesScreen(targetId: _workLog.id, readOnly: true, categories: const {'timesheet_attachment':'Timesheet attachments'})));
-        })],
         title: const Text(AppStrings.timesheetDetailsTitle),
         centerTitle: true,
       ),

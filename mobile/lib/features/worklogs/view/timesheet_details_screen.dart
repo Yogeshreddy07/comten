@@ -5,7 +5,6 @@ import '../../../core/utils/date_formatter.dart';
 import '../../../shared/constants/app_strings.dart';
 import '../../../shared/enums/approval_status.dart';
 import '../../../shared/widgets/app_card.dart';
-import '../../../shared/widgets/files_screen.dart';
 import '../../projects/widgets/review_summary_card.dart';
 import '../model/work_log.dart';
 import '../utils/work_log_duration_formatter.dart';
@@ -26,9 +25,6 @@ class TimesheetDetailsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text(AppStrings.timesheetDetailsTitle),
-        actions: [IconButton(tooltip: 'Attachments', icon: const Icon(Icons.attach_file), onPressed: () {
-          Navigator.push(context, MaterialPageRoute(builder: (_) => FilesScreen(targetId: workLog.id, categories: const {'timesheet_attachment':'Timesheet attachments'})));
-        })],
         centerTitle: true,
       ),
       body: SafeArea(

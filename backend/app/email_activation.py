@@ -12,18 +12,10 @@ from .recovery import digest, resolve
 from .messaging import email, normalize_phone
 from .email_templates import render
 from .models import valid_password
+from .otp_policy import MAX_ATTEMPTS, LOCKOUT_SECONDS, LOCKED, wrong_otp, check_lock
 
 router = APIRouter(prefix='/api/auth/signup')
-MAX_ATTEMPTS = 5
 EXPIRED = 'OTP has expired. Tap Resend OTP to get a new code.'
-LOCKED = 'Too many incorrect attempts. Tap Resend OTP to get a new code.'
-
-
-def wrong_otp(attempts):
-    left = MAX_ATTEMPTS - attempts
-    if left <= 0:
-        return LOCKED
-    return f'Incorrect OTP. {left} attempt{"s" if left != 1 else ""} left.'
 
 
 def mask_email(value):
@@ -59,9 +51,9 @@ async def send_activation(person):
     @firestore.transactional
     def reserve(tx):
         old = ref.get(transaction=tx).to_dict() or {}
+        check_lock(old, now)
         count = old.get('sendCount', 0) if old.get('sendWindow', 0) > now - 3600 else 0
-        # A locked-out OTP can be replaced immediately; the hourly cap still applies.
-        if old.get('lastSent', 0) > now - 60 and old.get('attempts', 0) < MAX_ATTEMPTS:
+        if old.get('lastSent', 0) > now - 60:
             if (old.get('deliveryState') == 'ACCEPTED' and old.get('recipientHash') == recipient_hash(person)
                     and old.get('expires', 0) > now and old.get('otpHash') != 'consumed'):
                 return False
@@ -70,7 +62,7 @@ async def send_activation(person):
             raise HTTPException(429, 'Too many OTP requests. Please try again later')
         tx.set(ref, {'generation': generation, 'otpHash': digest('activation:' + uid + ':' + otp),
                      'recipientHash': recipient_hash(person), 'expires': now + 600, 'attempts': 0,
-                     'lastSent': now, 'sendCount': count + 1, 'sendWindow': old.get('sendWindow', now) if count else now,
+                     'lastSent': now, 'lockedUntil': 0, 'sendCount': count + 1, 'sendWindow': old.get('sendWindow', now) if count else now,
                      'deliveryState': 'SENDING', 'proofHash': None}, merge=True)
         return True
 
@@ -144,20 +136,23 @@ def verify(body: dict):
     @firestore.transactional
     def consume(tx):
         state = ref.get(transaction=tx).to_dict() or {}
+        now = time.time()
+        check_lock(state, now)
         attempts = state.get('attempts', 0)
+        if attempts >= MAX_ATTEMPTS:
+            return EXPIRED
         if (state.get('deliveryState') != 'ACCEPTED' or state.get('expires', 0) < time.time()
                 or state.get('recipientHash') != recipient_hash(person) or state.get('proofHash')):
             return EXPIRED
-        if attempts >= MAX_ATTEMPTS:
-            return LOCKED
         valid = hmac.compare_digest(state['otpHash'], digest('activation:' + uid + ':' + str(body.get('otp', '')).strip()))
         tx.update(ref, {'attempts': attempts + 1,
+                       **({'lockedUntil': now + LOCKOUT_SECONDS} if not valid and attempts + 1 >= MAX_ATTEMPTS else {}),
                        **({'otpHash': 'consumed', 'proofHash': digest(proof)} if valid else {})})
         return None if valid else wrong_otp(attempts + 1)
 
     failure = transact(consume)
     if failure:
-        raise HTTPException(401, failure)
+        raise HTTPException(401, failure, headers={'Retry-After': str(LOCKOUT_SECONDS)} if failure == LOCKED else None)
     return {'success': True, 'message': 'Email verified. Set your password.',
             'data': {'employeeCode': person['employeeCode'], 'signupToken': proof}}
 

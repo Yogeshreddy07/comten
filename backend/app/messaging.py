@@ -10,8 +10,8 @@ from firebase_admin import firestore, messaging
 from fastapi import HTTPException
 from .config import settings
 from .store import db, all_rows
+from .otp_policy import LOCKED as PHONE_OTP_LOCKED
 
-PHONE_OTP_LOCKED = 'No attempts left. Please try again after some time.'
 
 
 async def provider_request(method,url,**kwargs):

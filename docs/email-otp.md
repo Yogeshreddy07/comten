@@ -11,8 +11,12 @@ an undisclosed random credential while pending, and the account is disabled.
 Existing activated accounts and passwords are preserved. Legacy accounts that
 have not completed verification can also activate by email OTP.
 
-Activation OTPs expire in 10 minutes, permit five attempts, and have a 60-second
-resend cooldown and five sends per hour. Only HMAC hashes are stored; OTPs and
+Email activation, password recovery, and phone OTPs permit three attempts:
+the first incorrect code leaves two attempts, the second leaves one, and the
+third blocks verification and resending for 15 minutes. The server persists
+the lockout across app restarts. After it ends, request a fresh code. OTPs
+expire in 10 minutes, with a 60-second resend cooldown and five sends per hour.
+Only HMAC hashes are stored for email OTPs; OTPs and
 password-setup proofs are single-use, purpose-separated, and bound to the
 employee's current email. Pending accounts cannot access the API or Firestore.
 After password setup the account remains disabled in `PHONE_PENDING`. A separate
